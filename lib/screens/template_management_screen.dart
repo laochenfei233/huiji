@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:meeting_note/models/template.dart';
-import 'package:meeting_note/services/template_service.dart';
+import 'package:yanji/models/template.dart';
+import 'package:yanji/services/template_service.dart';
 
 class TemplateManagementScreen extends StatefulWidget {
   const TemplateManagementScreen({super.key});
@@ -14,6 +14,7 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
   final TemplateService _templateService = TemplateService();
   List<Template> _templates = [];
   bool _isLoading = true;
+  String? _defaultTemplateId;
 
   @override
   void initState() {
@@ -22,26 +23,33 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
   }
 
   Future<void> _loadTemplates() async {
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() => _isLoading = true);
 
     try {
       final templates = await _templateService.getAllTemplates();
+      final defaultId = await _templateService.getDefaultTemplateId();
       setState(() {
         _templates = templates;
+        _defaultTemplateId = defaultId;
         _isLoading = false;
       });
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
+      setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('加载模板失败: $e')),
         );
       }
     }
+  }
+
+  Future<void> _toggleDefault(Template template) async {
+    if (_defaultTemplateId == template.id) {
+      await _templateService.clearDefaultTemplate();
+    } else {
+      await _templateService.setDefaultTemplate(template.id);
+    }
+    _loadTemplates();
   }
 
   void _addNewTemplate() {
@@ -98,17 +106,9 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
 
   Future<void> _deleteTemplate(String templateId) async {
     try {
-      final template =
-          _templates.firstWhere((t) => t.id == templateId && !t.isDefault);
-      if (template.isDefault) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('无法删除默认模板')),
-          );
-        }
-        return;
+      if (_defaultTemplateId == templateId) {
+        await _templateService.clearDefaultTemplate();
       }
-
       await _templateService.deleteTemplate(templateId);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -143,6 +143,7 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
               itemCount: _templates.length,
               itemBuilder: (context, index) {
                 final template = _templates[index];
+                final isDefault = _defaultTemplateId == template.id;
                 return Card(
                   margin: const EdgeInsets.symmetric(
                       horizontal: 16, vertical: 8),
@@ -152,13 +153,13 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
                         Expanded(
                           child: Text(template.name),
                         ),
-                        if (template.isDefault)
+                        if (isDefault)
                           const Chip(
                             label: Text(
                               '默认',
                               style: TextStyle(fontSize: 12),
                             ),
-                            backgroundColor: Colors.blue,
+                            backgroundColor: Color(0xFF4A90D9),
                             labelStyle: TextStyle(color: Colors.white),
                           ),
                       ],
@@ -169,12 +170,24 @@ class _TemplateManagementScreenState extends State<TemplateManagementScreen> {
                       overflow: TextOverflow.ellipsis,
                     ),
                     onTap: () => _editTemplate(template),
-                    trailing: template.isDefault
-                        ? null
-                        : IconButton(
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: Icon(
+                            isDefault ? Icons.star : Icons.star_border,
+                            color: isDefault ? Colors.amber : null,
+                          ),
+                          tooltip: isDefault ? '取消默认' : '设为默认',
+                          onPressed: () => _toggleDefault(template),
+                        ),
+                        if (!isDefault)
+                          IconButton(
                             icon: const Icon(Icons.delete),
                             onPressed: () => _deleteTemplate(template.id),
                           ),
+                      ],
+                    ),
                   ),
                 );
               },

@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
-import 'package:meeting_note/models/meeting.dart';
-import 'package:pdf/pdf.dart';
+import 'package:yanji/models/meeting.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 class ExportUtils {
@@ -18,10 +17,10 @@ Meeting: ${meeting.title}
 Date: ${meeting.date}
 
 Transcript:
-${meeting.transcript}
+${meeting.transcript ?? ''}
 
 Summary:
-${meeting.summary}
+${meeting.summary ?? ''}
 ''';
         await file.writeAsString(content);
         break;
@@ -57,14 +56,14 @@ ${meeting.summary}
                 style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
               ),
               pw.SizedBox(height: 10),
-              pw.Text(meeting.transcript),
+              pw.Text(meeting.transcript ?? ''),
               pw.SizedBox(height: 20),
               pw.Text(
                 'Summary:',
                 style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
               ),
               pw.SizedBox(height: 10),
-              pw.Text(meeting.summary),
+              pw.Text(meeting.summary ?? ''),
             ],
           );
         },

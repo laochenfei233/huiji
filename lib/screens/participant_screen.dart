@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:meeting_note/models/meeting.dart';
+import 'package:yanji/models/meeting.dart';
 
 class ParticipantScreen extends StatefulWidget {
   final List<Participant> participants;
@@ -25,13 +25,14 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
       final participant = Participant(
         id: _nameController.text,
         name: _nameController.text,
+        joinTime: DateTime.now(),
       );
       widget.onParticipantAdded(participant);
       _nameController.clear();
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Participant added')),
+          const SnackBar(content: Text('参与者已添加')),
         );
       }
     }
@@ -56,7 +57,7 @@ class _ParticipantScreenState extends State<ParticipantScreen> {
             TextField(
               controller: _nameController,
               decoration: const InputDecoration(
-                labelText: 'Participant Name',
+                labelText: '参与者姓名',
                 border: OutlineInputBorder(),
               ),
             ),

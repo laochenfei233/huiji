@@ -1,546 +1,671 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
-import 'package:dio/dio.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:web_socket_channel/status.dart' as status;
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:web_socket_channel/io.dart';
+import 'package:yanji/utils/config_loader.dart';
 
-// 定义连接状态枚举
-enum WebSocketConnectionStatus {
+/// ASR 识别状态
+enum AsrStatus {
   disconnected,
   connecting,
   connected,
+  recognizing,
+  stopped,
   error,
 }
 
-class ASRService {
-  final Dio _dio = Dio();
+/// ASR 识别结果
+class AsrResult {
+  final String text;
+  final bool isFinal; // false=中间结果, true=最终结果
+  final String? speaker;
+
+  AsrResult({
+    required this.text,
+    this.isFinal = false,
+    this.speaker,
+  });
+}
+
+/// ASR 服务抽象接口
+abstract class AsrService {
+  /// 转录结果流：实时返回识别文本
+  Stream<AsrResult> get transcriptionStream;
+
+  /// 状态流
+  Stream<AsrStatus> get statusStream;
+
+  /// 当前状态
+  AsrStatus get status;
+
+  /// 启动识别，订阅音频流并发送到 ASR 服务
+  Future<void> start({required Stream<Uint8List> audioStream});
+
+  /// 停止识别
+  Future<void> stop();
+
+  /// 释放资源
+  void dispose();
+}
+
+/// 空实现（无 ASR 配置时使用）
+class NoOpAsrService extends AsrService {
+  final StreamController<AsrResult> _transcriptionController =
+      StreamController<AsrResult>.broadcast();
+  final StreamController<AsrStatus> _statusController =
+      StreamController<AsrStatus>.broadcast();
+  AsrStatus _status = AsrStatus.disconnected;
+
+  @override
+  Stream<AsrResult> get transcriptionStream => _transcriptionController.stream;
+
+  @override
+  Stream<AsrStatus> get statusStream => _statusController.stream;
+
+  @override
+  AsrStatus get status => _status;
+
+  @override
+  Future<void> start({required Stream<Uint8List> audioStream}) async {
+    _status = AsrStatus.recognizing;
+    _statusController.add(_status);
+  }
+
+  @override
+  Future<void> stop() async {
+    _status = AsrStatus.stopped;
+    _statusController.add(_status);
+  }
+
+  @override
+  void dispose() {
+    _transcriptionController.close();
+    _statusController.close();
+  }
+}
+
+/// DashScope 百炼实时语音识别 WebSocket 实现
+///
+/// 协议说明：
+/// 1. 建立 WebSocket 连接到百炼 api-ws/v1/inference 端点
+/// 2. 发送 run-task JSON（指定模型、音频参数）
+/// 3. 接收 task-started 确认
+/// 4. 持续发送 PCM binary 帧（16kHz 16bit 单声道）
+/// 5. 接收 result-generated JSON（实时识别结果）
+/// 6. 发送 finish-task 结束任务
+/// 7. 接收 task-finished 确认
+class FunASRRealtimeService extends AsrService {
+  final String url; // wss://dashscope.aliyuncs.com/api-ws/v1/inference
+  final String? apiKey; // DashScope API Key
+  final String? modelName; // 模型名: fun-asr-realtime / qwen3-asr-flash-realtime
+  final Map<String, dynamic> _extraParams;
+
   WebSocketChannel? _channel;
-  WebSocketConnectionStatus _connectionStatus = WebSocketConnectionStatus.disconnected;
+  StreamSubscription? _audioSub;
+  StreamSubscription? _wsSub;
   String? _currentTaskId;
   bool _taskStarted = false;
-  
-  // 添加状态变更回调，避免频繁更新UI
-  Function(WebSocketConnectionStatus)? onConnectionStatusChanged;
-  
-  // 获取当前连接状态
-  WebSocketConnectionStatus get connectionStatus => _connectionStatus;
-  
-  /// Transcribe audio data using the specified model
-  Future<String> transcribe(AudioData audio, String modelName, ASRModelConfig config) async {
-    try {
-      final response = await _dio.post(
-        config.url,
-        data: _buildRequestData(modelName, audio),
-        options: Options(
-          headers: _buildHeaders(modelName, config.key),
-        ),
-      );
-      
-      if (response.statusCode == 200) {
-        final result = response.data;
-        // Parse the response based on the model
-        if (modelName == 'Aliyun') {
-          return result['output']['text'] ?? '';
-        } else if (modelName == 'Local') {
-          return result['text'] ?? '';
-        }
-        return result.toString();
-      } else {
-        throw Exception('ASR request failed with status: ${response.statusCode}');
-      }
-    } catch (error, stackTrace) {
-      // 添加堆栈跟踪信息以便更好地调试
-      print('ASR transcription error: $error');
-      print('Stack trace: $stackTrace');
-      throw Exception('ASR transcription failed: $error');
-    }
-  }
-  
-  /// Real-time transcription using WebSocket
-  Stream<String> realTimeTranscription(AudioData audio, String modelName, ASRModelConfig config, {
-    String language = 'zh-CN',
-    int sampleRate = 16000,
-    String audioFormat = 'pcm',
-  }) async* {
-    try {
-      if (modelName == 'Aliyun') {
-        // Use WebSocket for real-time transcription with Aliyun
-        yield* _aliyunWebSocketTranscription(audio, config, language, sampleRate, audioFormat);
-      } else {
-        // For other models, fallback to regular transcription
-        final text = await transcribe(audio, modelName, config);
-        yield text;
-      }
-    } catch (error, stackTrace) {
-      // 添加堆栈跟踪信息以便更好地调试
-      print('Real-time transcription error: $error');
-      print('Stack trace: $stackTrace');
-      throw Exception('Real-time transcription failed: $error');
-    }
-  }
-  
-  /// 更新连接状态并通知监听者
-  void _updateConnectionStatus(WebSocketConnectionStatus status) {
-    if (_connectionStatus != status) {
-      _connectionStatus = status;
-      // 通知连接状态变更
-      onConnectionStatusChanged?.call(_connectionStatus);
-    }
-  }
-  
-  /// WebSocket implementation for Aliyun real-time transcription
-  Stream<String> _aliyunWebSocketTranscription(
-    AudioData audio,
-    ASRModelConfig config,
-    String language,
-    int sampleRate,
-    String audioFormat,
-  ) async* {
-    try {
-      // 更新连接状态
-      _updateConnectionStatus(WebSocketConnectionStatus.connecting);
-      
-      // WebSocket URL for DashScope
-      final wsUrl = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference';
-      
-      // Generate task ID
-      _currentTaskId = const Uuid().v4();
-      _taskStarted = false;
-      
-      // Connect to WebSocket
-      final uri = Uri.parse('${wsUrl}?authorization=bearer ${config.key}&x-dashscope-async=enable');
-      _channel = WebSocketChannel.connect(uri);
-      
-      // 更新连接状态
-      _updateConnectionStatus(WebSocketConnectionStatus.connected);
-      
-      // Listen for messages from the server
-      final messageStream = _channel!.stream.asBroadcastStream();
-      
-      // Send the run-task message to start the transcription
-      final taskMessage = {
-        'header': {
-          'action': 'run-task',
-          'task_id': _currentTaskId,
-          'streaming': 'duplex'
-        },
-        'payload': {
-          'task_group': 'audio',
-          'task': 'asr',
-          'function': 'recognition',
-          'model': 'fun-asr-realtime', // 使用fun-asr-realtime模型
-          'parameters': {
-            'format': audioFormat,
-            'sample_rate': sampleRate,
-            'language': language,
-          },
-          'input': {}
-        }
-      };
-      
-      print('Sending run-task message: ${jsonEncode(taskMessage)}');
-      _channel!.sink.add(jsonEncode(taskMessage));
-      
-      // Listen for results
-      String accumulatedText = '';
-      
-      await for (final message in messageStream) {
-        try {
-          print('Received message type: ${message.runtimeType}');
-          
-          // 检查是否是文本消息（JSON格式）还是二进制音频数据
-          if (message is String) {
-            print('Received text message: $message');
-            // 文本消息（JSON格式）
-            final Map<String, dynamic> response = jsonDecode(message);
-            
-            // 检查是否有错误信息
-            if (response['error'] != null) {
-              final error = response['error'];
-              throw Exception('WebSocket error: ${error['message'] ?? error.toString()}');
-            }
-            
-            final header = response['header'];
-            if (header != null) {
-              final action = header['action'];
-              
-              if (action == 'task-started') {
-                // 任务已启动，现在可以发送音频数据
-                _taskStarted = true;
-                print('Task started, ready to send audio data');
-                
-                // 发送音频数据
-                try {
-                  if (audio.data.isNotEmpty) {
-                    if (audio.data is List<int>) {
-                      _channel!.sink.add(Uint8List.fromList(audio.data));
-                    } else if (audio.data is Uint8List) {
-                      _channel!.sink.add(audio.data);
-                    } else {
-                      // 安全转换
-                      final dataList = List<int>.from(audio.data);
-                      _channel!.sink.add(Uint8List.fromList(dataList));
-                    }
-                  }
-                  
-                  // 发送finish-task指令
-                  final finishMessage = {
-                    'header': {
-                      'action': 'finish-task',
-                      'task_id': _currentTaskId,
-                    }
-                  };
-                  print('Sending finish-task message: ${jsonEncode(finishMessage)}');
-                  _channel!.sink.add(jsonEncode(finishMessage));
-                } catch (e) {
-                  print('Error sending audio data: $e');
-                  rethrow;
-                }
-              } else if (action == 'result-generated' && response['payload'] != null) {
-                final payload = response['payload'];
-                if (payload['output'] != null && payload['output']['sentence'] != null) {
-                  // 处理句子级别的输出
-                  final sentence = payload['output']['sentence'];
-                  if (sentence['text'] != null) {
-                    accumulatedText += sentence['text'];
-                    yield accumulatedText;
-                  }
-                } else if (payload['text'] != null) {
-                  // 处理直接的文本输出
-                  final text = payload['text'];
-                  accumulatedText += text;
-                  yield accumulatedText;
-                }
-              } else if (action == 'task-finished') {
-                // Task finished, close the connection
-                print('Task finished');
-                await _closeConnection();
-                break;
-              }
-            }
-          } else {
-            // 二进制音频数据，跳过处理
-            print('Skipping binary data message of type: ${message.runtimeType}');
-          }
-        } catch (e, stackTrace) {
-          // Handle JSON parsing errors
-          print('Error parsing WebSocket message: $e');
-          print('Stack trace: $stackTrace');
-          if (e is FormatException) {
-            // 可能是二进制音频数据，跳过处理
-            print('Skipping binary data message due to format exception');
-          } else {
-            rethrow;
-          }
-        }
-      }
-    } catch (error, stackTrace) {
-      _updateConnectionStatus(WebSocketConnectionStatus.error);
-      print('WebSocket connection error: $error');
-      print('Stack trace: $stackTrace');
-      await _closeConnection();
-      rethrow;
-    }
-  }
-  
-  /// 发送实时音频数据
-  Future<void> sendAudioData(Uint8List audioData) async {
-    if (_channel != null && _connectionStatus == WebSocketConnectionStatus.connected && _taskStarted) {
-      try {
-        // 直接发送Uint8List格式的音频数据
-        _channel!.sink.add(audioData);
-        print('Sent audio data with length: ${audioData.length}');
-      } catch (e, stackTrace) {
-        print('Error sending audio data: $e');
-        print('Stack trace: $stackTrace');
-        _updateConnectionStatus(WebSocketConnectionStatus.error);
-        throw Exception('Failed to send audio data: $e');
-      }
-    } else {
-      if (!_taskStarted) {
-        print('Task not started yet, cannot send audio data');
-      } else {
-        print('WebSocket is not connected, cannot send audio data');
-      }
-    }
-  }
-  
-  /// 发送实时音频流（用于Aliyun模型）
-  Stream<String> sendRealTimeAudioStream(Stream<Uint8List> audioStream, ASRModelConfig config, {
-    String language = 'zh-CN',
-    int sampleRate = 16000,
-    String audioFormat = 'pcm',
-  }) async* {
-    try {
-      // 更新连接状态
-      _updateConnectionStatus(WebSocketConnectionStatus.connecting);
-      
-      // WebSocket URL for DashScope
-      final wsUrl = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference';
-      
-      // Generate task ID
-      _currentTaskId = const Uuid().v4();
-      _taskStarted = false;
-      
-      // Connect to WebSocket
-      final uri = Uri.parse('${wsUrl}?authorization=bearer ${config.key}&x-dashscope-async=enable');
-      _channel = WebSocketChannel.connect(uri);
-      
-      // 更新连接状态
-      _updateConnectionStatus(WebSocketConnectionStatus.connected);
-      
-      // Listen for messages from the server
-      final messageStream = _channel!.stream.asBroadcastStream();
-      
-      // Send the run-task message to start the transcription
-      final taskMessage = {
-        'header': {
-          'action': 'run-task',
-          'task_id': _currentTaskId,
-          'streaming': 'duplex'
-        },
-        'payload': {
-          'task_group': 'audio',
-          'task': 'asr',
-          'function': 'recognition',
-          'model': 'fun-asr-realtime', // 使用fun-asr-realtime模型
-          'parameters': {
-            'format': audioFormat,
-            'sample_rate': sampleRate,
-            'language': language,
-          },
-          'input': {}
-        }
-      };
-      
-      print('Sending run-task message: ${jsonEncode(taskMessage)}');
-      _channel!.sink.add(jsonEncode(taskMessage));
-      
-      // Listen for results
-      String accumulatedText = '';
-      
-      // 同时监听服务器消息和音频流
-      await for (final message in messageStream) {
-        try {
-          print('Received message type: ${message.runtimeType}');
-          
-          // 检查是否是文本消息（JSON格式）还是二进制音频数据
-          if (message is String) {
-            print('Received text message: $message');
-            // 文本消息（JSON格式）
-            final Map<String, dynamic> response = jsonDecode(message);
-            
-            // 检查是否有错误信息
-            if (response['error'] != null) {
-              final error = response['error'];
-              throw Exception('WebSocket error: ${error['message'] ?? error.toString()}');
-            }
-            
-            final header = response['header'];
-            if (header != null) {
-              final action = header['action'];
-              
-              if (action == 'task-started') {
-                // 任务已启动，现在可以发送音频数据
-                _taskStarted = true;
-                print('Task started, ready to send audio data');
-                
-                // 开始监听音频流并发送数据
-                audioStream.listen(
-                  (audioData) {
-                    if (_channel != null && _taskStarted) {
-                      _channel!.sink.add(audioData);
-                      print('Sent audio data chunk: ${audioData.length} bytes');
-                    }
-                  },
-                  onError: (error) {
-                    print('Audio stream error: $error');
-                  },
-                  onDone: () {
-                    // 音频流结束，发送finish-task指令
-                    if (_channel != null && _taskStarted) {
-                      final finishMessage = {
-                        'header': {
-                          'action': 'finish-task',
-                          'task_id': _currentTaskId,
-                        }
-                      };
-                      print('Sending finish-task message: ${jsonEncode(finishMessage)}');
-                      _channel!.sink.add(jsonEncode(finishMessage));
-                    }
-                  },
-                );
-              } else if (action == 'result-generated' && response['payload'] != null) {
-                final payload = response['payload'];
-                if (payload['output'] != null && payload['output']['sentence'] != null) {
-                  // 处理句子级别的输出
-                  final sentence = payload['output']['sentence'];
-                  if (sentence['text'] != null) {
-                    accumulatedText += sentence['text'];
-                    yield accumulatedText;
-                  }
-                } else if (payload['text'] != null) {
-                  // 处理直接的文本输出
-                  final text = payload['text'];
-                  accumulatedText += text;
-                  yield accumulatedText;
-                }
-              } else if (action == 'task-finished') {
-                // Task finished, close the connection
-                print('Task finished');
-                await _closeConnection();
-                break;
-              }
-            }
-          } else {
-            // 二进制音频数据，跳过处理
-            print('Skipping binary data message of type: ${message.runtimeType}');
-          }
-        } catch (e, stackTrace) {
-          // Handle JSON parsing errors
-          print('Error parsing WebSocket message: $e');
-          print('Stack trace: $stackTrace');
-          if (e is FormatException) {
-            // 可能是二进制音频数据，跳过处理
-            print('Skipping binary data message due to format exception');
-          } else {
-            rethrow;
-          }
-        }
-      }
-    } catch (error, stackTrace) {
-      _updateConnectionStatus(WebSocketConnectionStatus.error);
-      print('WebSocket connection error: $error');
-      print('Stack trace: $stackTrace');
-      await _closeConnection();
-      rethrow;
-    }
-  }
-  
-  /// 关闭WebSocket连接
-  Future<void> _closeConnection() async {
-    if (_channel != null) {
-      try {
-        await _channel!.sink.close(status.goingAway);
-      } catch (e, stackTrace) {
-        print('Error closing WebSocket connection: $e');
-        print('Stack trace: $stackTrace');
-      } finally {
-        _channel = null;
-        _updateConnectionStatus(WebSocketConnectionStatus.disconnected);
-        _currentTaskId = null;
-        _taskStarted = false;
-      }
-    }
-  }
-  
-  /// 手动关闭连接
-  Future<void> closeConnection() async {
-    await _closeConnection();
-  }
-  
-  Map<String, dynamic> _buildRequestData(String modelName, AudioData audio) {
-    if (modelName == 'Aliyun') {
-      // 根据阿里云文档构建请求数据，使用fun-asr-realtime模型
-      // 注意：实际使用时需要将音频数据转换为Base64格式
-      // 确保音频数据是正确的类型后再进行Base64编码
-      String audioBase64 = '';
-      try {
-        // 详细检查音频数据类型并安全转换
-        if (audio.data is Uint8List) {
-          audioBase64 = base64Encode(audio.data as Uint8List);
-        } else if (audio.data is List<int>) {
-          audioBase64 = base64Encode(audio.data as List<int>);
-        } else {
-          // 最后尝试转换为List<int>
-          final dataList = List<int>.from(audio.data);
-          audioBase64 = base64Encode(dataList);
-        }
-      } catch (e, stackTrace) {
-        print('Error encoding audio data to Base64: $e');
-        print('Audio data type: ${audio.data.runtimeType}');
-        print('Stack trace: $stackTrace');
-        rethrow;
-      }
-      
-      return {
-        'model': 'fun-asr-realtime',
-        'input': {
-          'audio': audioBase64,
-        },
-        'parameters': {
-          'language': 'zh-CN',
-          'stream': true,
-        }
-      };
-    } else if (modelName == 'Local') {
-      return {
-        'audio_data': audio.data,
-      };
-    }
-    
-    return {
-      'audio_data': audio.data,
-    };
-  }
-  
-  Map<String, String> _buildHeaders(String modelName, String apiKey) {
-    if (modelName == 'Aliyun') {
-      return {
-        'Authorization': 'Bearer $apiKey',
-        'Content-Type': 'application/json',
-        'X-DashScope-Async': 'enable',
-        'X-DashScope-SSE': 'enable',
-      };
-    } else if (modelName == 'Local') {
-      return {
-        'Authorization': 'Bearer $apiKey',
-        'Content-Type': 'application/json',
-      };
-    }
-    
-    return {
-      'Authorization': 'Bearer $apiKey',
-      'Content-Type': 'application/json',
-    };
-  }
-}
 
-class AudioData {
-  final List<int> data;
-  
-  AudioData(this.data);
-}
+  final StreamController<AsrResult> _transcriptionController =
+      StreamController<AsrResult>.broadcast();
+  final StreamController<AsrStatus> _statusController =
+      StreamController<AsrStatus>.broadcast();
+  AsrStatus _status = AsrStatus.disconnected;
 
-class ASRModelConfig {
-  final String name;
-  final String url;
-  final String key;
-  final String? modelName;
-  
-  ASRModelConfig({
-    required this.name,
+  // 连接超时
+  static const _connectionTimeout = Duration(seconds: 10);
+
+  // 音频缓冲区：task-started 前缓存音频数据
+  final List<Uint8List> _audioBuffer = [];
+  static const int _maxBufferSize = 200;
+  bool _isFlushing = false;
+
+  // 调试计数器
+  int audioBytesSent = 0;
+  int audioChunksSent = 0;
+  int wsMessagesReceived = 0;
+  int wsTextResultsReceived = 0;
+
+  @override
+  Stream<AsrResult> get transcriptionStream => _transcriptionController.stream;
+
+  @override
+  Stream<AsrStatus> get statusStream => _statusController.stream;
+
+  @override
+  AsrStatus get status => _status;
+
+  FunASRRealtimeService({
     required this.url,
-    required this.key,
+    this.apiKey,
+    this.modelName,
+    Map<String, dynamic>? extraParams,
+  }) : _extraParams = extraParams ?? {};
+
+  /// 构造 WebSocket URI
+  Uri _buildWsUri() {
+    // 原生平台直连 DashScope（支持自定义 header），Web 走代理
+    if (!kIsWeb && apiKey != null && apiKey!.isNotEmpty) {
+      return Uri.parse('wss://dashscope.aliyuncs.com/api-ws/v1/inference');
+    }
+    // 自动修正协议：https→wss, http→ws
+    var wsUrl = url.trim();
+    if (wsUrl.startsWith('https://')) {
+      wsUrl = 'wss://${wsUrl.substring(8)}';
+    } else if (wsUrl.startsWith('http://')) {
+      wsUrl = 'ws://${wsUrl.substring(7)}';
+    }
+    // 确保以 ws:// 或 wss:// 开头
+    if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+      wsUrl = 'wss://$wsUrl';
+    }
+    debugPrint('[ASR] 原始 URL: "$url" → 修正后: "$wsUrl"');
+    return Uri.parse(wsUrl);
+  }
+
+  /// 获取 WebSocket 连接所需的 HTTP header（仅原生平台有效）
+  Map<String, String>? _buildHeaders() {
+    if (!kIsWeb && apiKey != null && apiKey!.isNotEmpty) {
+      return {'Authorization': 'Bearer $apiKey'};
+    }
+    return null;
+  }
+
+  @override
+  Future<void> start({required Stream<Uint8List> audioStream}) async {
+    if (_status == AsrStatus.recognizing || _status == AsrStatus.connecting) {
+      return;
+    }
+
+    _audioBuffer.clear();
+    _taskStarted = false;
+    _currentTaskId = null;
+
+    try {
+      _updateStatus(AsrStatus.connecting);
+
+      // 先订阅音频流（缓存数据，等 task-started 后发送）
+      _audioSub = audioStream.listen(
+        (audioData) => _sendAudioData(audioData),
+        onError: (error) {
+          _updateStatus(AsrStatus.error);
+        },
+      );
+
+      final wsUri = _buildWsUri();
+      final headers = _buildHeaders();
+      debugPrint('[ASR] url="$url" apiKey="${apiKey ?? 'null'}" wsUri=$wsUri headers=${headers != null ? 'Bearer ***' : 'none'}');
+
+      if (!kIsWeb) {
+        _channel = IOWebSocketChannel.connect(wsUri, headers: headers);
+      } else {
+        _channel = WebSocketChannel.connect(wsUri);
+      }
+
+      // 接收服务端消息
+      _wsSub = _channel!.stream.listen(
+        _handleServerMessage,
+        onError: (error) {
+          debugPrint('[ASR] WebSocket 流错误: $error');
+          _updateStatus(AsrStatus.error);
+        },
+        onDone: () {
+          debugPrint('[ASR] WebSocket 连接关闭');
+          if (_status == AsrStatus.recognizing) {
+            _updateStatus(AsrStatus.disconnected);
+          }
+        },
+      );
+
+      // 等待 WebSocket 连接就绪
+      debugPrint('[ASR] 等待 WebSocket 就绪...');
+      await _channel!.ready.timeout(_connectionTimeout, onTimeout: () {
+        debugPrint('[ASR] WebSocket 连接超时！');
+        throw TimeoutException(
+            '百炼 WebSocket 连接超时 (${_connectionTimeout.inSeconds}秒)');
+      });
+      debugPrint('[ASR] WebSocket 已就绪');
+
+      // 发送 run-task 启动识别任务
+      debugPrint('[ASR] 准备发送 run-task, channel=${_channel != null}, taskStarted=$_taskStarted');
+      _sendRunTask();
+    } catch (e) {
+      _updateStatus(AsrStatus.error);
+      rethrow;
+    }
+  }
+
+  /// 发送 run-task 指令（百炼 WebSocket 协议）
+  void _sendRunTask() {
+    if (_channel == null) {
+      debugPrint('[ASR] _sendRunTask: _channel 为 null，跳过');
+      return;
+    }
+
+    _currentTaskId = const Uuid().v4();
+    debugPrint('[ASR] _sendRunTask: task_id=$_currentTaskId');
+    final msg = jsonEncode({
+      'header': {
+        'action': 'run-task',
+        'task_id': _currentTaskId,
+        'streaming': 'duplex',
+      },
+      'payload': {
+        'task_group': 'audio',
+        'task': 'asr',
+        'function': 'recognition',
+        'model': modelName ?? 'fun-asr-realtime',
+        'parameters': {
+          'format': 'pcm',
+          'sample_rate': 16000,
+          'speaker_diarization_enabled': true,
+          if (_extraParams['disfluency_removal_enabled'] != null)
+            'disfluency_removal_enabled':
+                _extraParams['disfluency_removal_enabled'],
+        },
+        'input': {},
+      },
+    });
+
+    debugPrint('[ASR] _sendRunTask: 发送消息 (${msg.length} chars): ${msg.substring(0, 200)}...');
+    try {
+      _channel!.sink.add(msg);
+      debugPrint('[ASR] _sendRunTask: 消息已发送');
+    } catch (e) {
+      debugPrint('[ASR] _sendRunTask: 发送失败: $e');
+    }
+  }
+
+  /// 发送音频数据（binary frame）
+  /// task-started 前缓存，就绪后发送
+  void _sendAudioData(Uint8List data) {
+    if (_channel == null) return;
+
+    audioBytesSent += data.length;
+    audioChunksSent++;
+
+    if (!_taskStarted || _isFlushing) {
+      if (_audioBuffer.length < _maxBufferSize) {
+        _audioBuffer.add(data);
+      }
+      return;
+    }
+
+    _channel!.sink.add(data);
+  }
+
+  /// 清空音频缓冲区
+  void _flushAudioBuffer() {
+    if (_channel == null || _audioBuffer.isEmpty) return;
+
+    _isFlushing = true;
+    for (final chunk in _audioBuffer) {
+      _channel!.sink.add(chunk);
+    }
+    _audioBuffer.clear();
+    _isFlushing = false;
+  }
+
+  /// 处理服务端消息
+  void _handleServerMessage(dynamic message) {
+    wsMessagesReceived++;
+    debugPrint('[ASR] 收到消息 (type=${message.runtimeType}): $message');
+
+    // 统一转为字符串处理（web 上二进制帧可能包含 JSON 文本）
+    String? messageStr;
+    if (message is String) {
+      messageStr = message;
+    } else if (message is ByteBuffer) {
+      // web: web_socket_channel 可能将文本帧作为 ByteBuffer 传递
+      messageStr = utf8.decode(message.asUint8List());
+      debugPrint('[ASR] ByteBuffer 解码为文本: $messageStr');
+    } else if (message is List<int>) {
+      // native fallback
+      messageStr = utf8.decode(message);
+      debugPrint('[ASR] List<int> 解码为文本: $messageStr');
+    }
+
+    if (messageStr == null) {
+      debugPrint('[ASR] 无法处理的消息类型: ${message.runtimeType}');
+      return;
+    }
+
+    try {
+      final data = jsonDecode(messageStr) as Map<String, dynamic>;
+      final header = data['header'] as Map<String, dynamic>?;
+      if (header == null) {
+        debugPrint('[ASR] 无 header 的消息: $data');
+        return;
+      }
+
+      // 百炼响应使用 event 字段（task-started 等），请求使用 action 字段（run-task 等）
+      final event = (header['action'] ?? header['event']) as String?;
+      if (event == null) return;
+
+      switch (event) {
+        case 'task-started':
+          _taskStarted = true;
+          _updateStatus(AsrStatus.recognizing);
+          _flushAudioBuffer();
+          break;
+
+        case 'result-generated':
+          _handleResultGenerated(data);
+          break;
+
+        case 'task-finished':
+          _updateStatus(AsrStatus.stopped);
+          break;
+
+        case 'failed':
+        case 'error':
+          _updateStatus(AsrStatus.error);
+          break;
+      }
+    } catch (e) {
+      debugPrint('[ASR] 消息解析失败: $e, 原始消息: $messageStr');
+    }
+  }
+
+  /// 解析 result-generated 事件中的识别结果
+  void _handleResultGenerated(Map<String, dynamic> data) {
+    final payload = data['payload'] as Map<String, dynamic>?;
+    final output = payload?['output'] as Map<String, dynamic>?;
+    final sentence = output?['sentence'] as Map<String, dynamic>?;
+    if (sentence == null) return;
+
+    final text = sentence['text'] as String?;
+    if (text == null || text.isEmpty) return;
+
+    wsTextResultsReceived++;
+    final isSentenceEnd = sentence['sentence_end'] == true;
+
+    // 提取说话人信息（DashScope 说话人分离返回的字段）
+    final speakerId = sentence['speaker_id'] as String?;
+
+    _transcriptionController.add(AsrResult(
+      text: text,
+      isFinal: isSentenceEnd,
+      speaker: speakerId,
+    ));
+  }
+
+  /// 发送 finish-task 结束识别
+  Future<void> _sendFinishTask() async {
+    if (_channel == null || _currentTaskId == null) return;
+
+    try {
+      final msg = jsonEncode({
+        'header': {
+          'action': 'finish-task',
+          'task_id': _currentTaskId,
+        },
+        'payload': {},
+      });
+      _channel!.sink.add(msg);
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> stop() async {
+    // 发送 finish-task 通知服务端结束
+    await _sendFinishTask();
+
+    // 等待服务端返回 task-finished 或最终结果
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    await _cleanup();
+    _updateStatus(AsrStatus.stopped);
+  }
+
+  void _updateStatus(AsrStatus newStatus) {
+    _status = newStatus;
+    if (!_statusController.isClosed) {
+      _statusController.add(newStatus);
+    }
+  }
+
+  Future<void> _cleanup() async {
+    _taskStarted = false;
+    _currentTaskId = null;
+
+    await _audioSub?.cancel();
+    _audioSub = null;
+
+    await _wsSub?.cancel();
+    _wsSub = null;
+
+    try {
+      await _channel?.sink.close();
+    } catch (_) {}
+    _channel = null;
+  }
+
+  @override
+  void dispose() {
+    _cleanup();
+    _transcriptionController.close();
+    _statusController.close();
+  }
+}
+
+/// 本地 FunASR WebSocket 服务（paraformer-zh-streaming 等本地部署模型）
+class LocalFunASRService extends AsrService {
+  final String url; // ws://localhost:10095
+  final String? modelName; // paraformer-zh-streaming
+
+  WebSocketChannel? _channel;
+  StreamSubscription? _audioSub;
+  StreamSubscription? _wsSub;
+  bool _isConnected = false;
+
+  final StreamController<AsrResult> _transcriptionController =
+      StreamController<AsrResult>.broadcast();
+  final StreamController<AsrStatus> _statusController =
+      StreamController<AsrStatus>.broadcast();
+  AsrStatus _status = AsrStatus.disconnected;
+
+  static const _connectionTimeout = Duration(seconds: 10);
+
+  // 调试计数器
+  int audioBytesSent = 0;
+  int audioChunksSent = 0;
+  int wsMessagesReceived = 0;
+  int wsTextResultsReceived = 0;
+
+  @override
+  Stream<AsrResult> get transcriptionStream => _transcriptionController.stream;
+
+  @override
+  Stream<AsrStatus> get statusStream => _statusController.stream;
+
+  @override
+  AsrStatus get status => _status;
+
+  LocalFunASRService({
+    required this.url,
     this.modelName,
   });
-  
-  factory ASRModelConfig.fromJson(Map<String, dynamic> json) {
-    return ASRModelConfig(
-      name: json['name'],
-      url: json['url'],
-      key: json['key'] ?? '',
-      modelName: json['model_name'],
-    );
+
+  @override
+  Future<void> start({required Stream<Uint8List> audioStream}) async {
+    if (_status == AsrStatus.recognizing || _status == AsrStatus.connecting) {
+      return;
+    }
+
+    try {
+      _updateStatus(AsrStatus.connecting);
+
+      // 连接本地 FunASR WebSocket 服务
+      final wsUri = Uri.parse(url);
+      debugPrint('[LocalASR] 连接 WebSocket: $wsUri');
+
+      _channel = WebSocketChannel.connect(wsUri);
+
+      // 订阅音频流
+      _audioSub = audioStream.listen(
+        (audioData) => _sendAudioData(audioData),
+        onError: (error) {
+          debugPrint('[LocalASR] 音频流错误: $error');
+          _updateStatus(AsrStatus.error);
+        },
+      );
+
+      // 接收服务端消息
+      _wsSub = _channel!.stream.listen(
+        _handleServerMessage,
+        onError: (error) {
+          debugPrint('[LocalASR] WebSocket 错误: $error');
+          _updateStatus(AsrStatus.error);
+        },
+        onDone: () {
+          debugPrint('[LocalASR] WebSocket 连接关闭');
+          if (_status == AsrStatus.recognizing) {
+            _updateStatus(AsrStatus.disconnected);
+          }
+        },
+      );
+
+      // 等待连接就绪
+      await _channel!.ready.timeout(_connectionTimeout, onTimeout: () {
+        throw TimeoutException('本地 ASR 连接超时 (${_connectionTimeout.inSeconds}秒)');
+      });
+
+      _isConnected = true;
+      _updateStatus(AsrStatus.recognizing);
+      debugPrint('[LocalASR] 已连接，开始识别');
+
+    } catch (e) {
+      _updateStatus(AsrStatus.error);
+      rethrow;
+    }
   }
-  
-  Map<String, dynamic> toJson() {
-    return {
-      'name': name,
-      'url': url,
-      'key': key,
-      'model_name': modelName,
-    };
+
+  /// 发送音频数据到本地 FunASR 服务
+  void _sendAudioData(Uint8List data) {
+    if (_channel == null || !_isConnected) return;
+
+    audioBytesSent += data.length;
+    audioChunksSent++;
+
+    try {
+      _channel!.sink.add(data);
+    } catch (e) {
+      debugPrint('[LocalASR] 发送音频失败: $e');
+    }
+  }
+
+  /// 处理服务端消息（本地 FunASR 协议）
+  void _handleServerMessage(dynamic message) {
+    wsMessagesReceived++;
+
+    String? messageStr;
+    if (message is String) {
+      messageStr = message;
+    } else if (message is ByteBuffer) {
+      messageStr = utf8.decode(message.asUint8List());
+    } else if (message is List<int>) {
+      messageStr = utf8.decode(message);
+    }
+
+    if (messageStr == null) return;
+
+    try {
+      final data = jsonDecode(messageStr) as Map<String, dynamic>;
+
+      // 本地 FunASR 返回格式：{"text": "识别文本", "is_final": true/false}
+      // 或者嵌套格式：{"result": {"text": "...", "is_final": ...}}
+      String? text;
+      bool isFinal = false;
+
+      if (data.containsKey('text')) {
+        text = data['text'] as String?;
+        isFinal = data['is_final'] as bool? ?? false;
+      } else if (data.containsKey('result')) {
+        final result = data['result'] as Map<String, dynamic>;
+        text = result['text'] as String?;
+        isFinal = result['is_final'] as bool? ?? false;
+      }
+
+      if (text != null && text.isNotEmpty) {
+        wsTextResultsReceived++;
+        _transcriptionController.add(AsrResult(
+          text: text,
+          isFinal: isFinal,
+        ));
+      }
+    } catch (e) {
+      debugPrint('[LocalASR] 消息解析失败: $e');
+    }
+  }
+
+  @override
+  Future<void> stop() async {
+    _isConnected = false;
+
+    await _audioSub?.cancel();
+    _audioSub = null;
+
+    await _wsSub?.cancel();
+    _wsSub = null;
+
+    try {
+      await _channel?.sink.close();
+    } catch (_) {}
+    _channel = null;
+
+    _updateStatus(AsrStatus.stopped);
+  }
+
+  void _updateStatus(AsrStatus newStatus) {
+    _status = newStatus;
+    if (!_statusController.isClosed) {
+      _statusController.add(newStatus);
+    }
+  }
+
+  @override
+  void dispose() {
+    _audioSub?.cancel();
+    _wsSub?.cancel();
+    try {
+      _channel?.sink.close();
+    } catch (_) {}
+    _transcriptionController.close();
+    _statusController.close();
+  }
+}
+
+/// ASR 服务工厂
+class AsrServiceFactory {
+  /// 根据配置创建对应的 ASR 服务实例
+  static AsrService create(ASRModelConfig config) {
+    switch (config.type) {
+      case 'websocket':
+        return FunASRRealtimeService(
+          url: config.url,
+          apiKey: config.key,
+          modelName: config.modelName,
+          extraParams: {
+            if (config.modelName != null) 'model': config.modelName,
+          },
+        );
+      case 'local_funasr':
+        // 本地部署的 FunASR 服务（paraformer-zh-streaming 等）
+        return LocalFunASRService(
+          url: config.url,
+          modelName: config.modelName,
+        );
+      case 'http':
+        // HTTP-based ASR（如 qwen-audio-turbo）在 LLMService 中处理
+        // 这里返回 NoOpAsrService，转录在 recording screen 中通过 LLMService 完成
+        return NoOpAsrService();
+      default:
+        return NoOpAsrService();
+    }
   }
 }

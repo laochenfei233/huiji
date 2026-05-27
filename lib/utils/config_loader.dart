@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
-import 'package:meeting_note/services/asr_service.dart';
-import 'package:meeting_note/services/summary_service.dart';
-import 'package:meeting_note/services/config_service.dart';
+import 'package:yanji/services/config_service.dart';
 
 class ConfigLoader {
   static Future<AppConfig> loadConfig() async {
@@ -28,14 +26,12 @@ class ConfigLoader {
         }
       }
       
-      final List<SummaryModelConfig> summaryModels = [];
+      final List<LLMModelConfig> llmModels = [];
       if (userSummaryModels.isNotEmpty) {
-        // Use user configured models if available
-        summaryModels.addAll(userSummaryModels);
+        llmModels.addAll(userSummaryModels);
       } else if (jsonData['summary_models'] != null) {
-        // Fallback to default models
         for (var model in jsonData['summary_models']) {
-          summaryModels.add(SummaryModelConfig.fromJson(model));
+          llmModels.add(LLMModelConfig.fromJson(model));
         }
       }
       
@@ -43,24 +39,23 @@ class ConfigLoader {
         s3: userS3Config.bucket.isNotEmpty ? userS3Config : 
              jsonData['storage'] != null && jsonData['storage']['s3'] != null 
              ? S3Config.fromJson(jsonData['storage']['s3']) 
-             : S3Config(bucket: '', region: ''),
+             : S3Config(),
         webdav: userWebDAVConfig.url.isNotEmpty ? userWebDAVConfig : 
                 jsonData['storage'] != null && jsonData['storage']['webdav'] != null 
                 ? WebDAVConfig.fromJson(jsonData['storage']['webdav']) 
-                : WebDAVConfig(url: '', username: ''),
+                : WebDAVConfig(),
       );
       
       return AppConfig(
         asrModels: asrModels,
-        summaryModels: summaryModels,
+        llmModels: llmModels,
         storage: storage,
       );
     } catch (e) {
-      // Return default config if loading fails
       return AppConfig(
         asrModels: [],
-        summaryModels: [],
-        storage: StorageConfig(s3: S3Config(bucket: '', region: ''), webdav: WebDAVConfig(url: '', username: '')),
+        llmModels: [],
+        storage: StorageConfig(s3: S3Config(), webdav: WebDAVConfig()),
       );
     }
   }
@@ -68,14 +63,17 @@ class ConfigLoader {
 
 class AppConfig {
   final List<ASRModelConfig> asrModels;
-  final List<SummaryModelConfig> summaryModels;
+  final List<LLMModelConfig> llmModels;
   final StorageConfig storage;
-  
+
   AppConfig({
     required this.asrModels,
-    required this.summaryModels,
+    required this.llmModels,
     required this.storage,
   });
+
+  // 向后兼容
+  List<LLMModelConfig> get summaryModels => llmModels;
 }
 
 class StorageConfig {
@@ -90,8 +88,8 @@ class StorageConfig {
   factory StorageConfig.fromJson(Map<String, dynamic>? json) {
     if (json == null) {
       return StorageConfig(
-        s3: S3Config(bucket: '', region: ''),
-        webdav: WebDAVConfig(url: '', username: ''),
+        s3: S3Config(),
+        webdav: WebDAVConfig(),
       );
     }
     
@@ -103,57 +101,150 @@ class StorageConfig {
 }
 
 class S3Config {
+  final String endpoint;
   final String bucket;
   final String region;
-  
+  final String accessKey;
+  final String secretKey;
+  final bool usePathStyle; // true=path style (OSS/MinIO), false=virtual-hosted
+
   S3Config({
-    required this.bucket,
-    required this.region,
+    this.endpoint = '',
+    this.bucket = '',
+    this.region = '',
+    this.accessKey = '',
+    this.secretKey = '',
+    this.usePathStyle = true,
   });
-  
+
+  bool get isConfigured => endpoint.isNotEmpty && bucket.isNotEmpty && accessKey.isNotEmpty;
+
   factory S3Config.fromJson(Map<String, dynamic>? json) {
-    if (json == null) {
-      return S3Config(bucket: '', region: '');
-    }
-    
+    if (json == null) return S3Config();
     return S3Config(
+      endpoint: json['endpoint'] ?? '',
       bucket: json['bucket'] ?? '',
       region: json['region'] ?? '',
+      accessKey: json['accessKey'] ?? '',
+      secretKey: json['secretKey'] ?? '',
+      usePathStyle: json['usePathStyle'] ?? true,
     );
   }
-  
-  Map<String, dynamic> toJson() {
-    return {
-      'bucket': bucket,
-      'region': region,
-    };
-  }
+
+  Map<String, dynamic> toJson() => {
+    'endpoint': endpoint,
+    'bucket': bucket,
+    'region': region,
+    'accessKey': accessKey,
+    'secretKey': secretKey,
+    'usePathStyle': usePathStyle,
+  };
 }
 
 class WebDAVConfig {
   final String url;
   final String username;
-  
+  final String password;
+
   WebDAVConfig({
-    required this.url,
-    required this.username,
+    this.url = '',
+    this.username = '',
+    this.password = '',
   });
-  
+
+  bool get isConfigured => url.isNotEmpty && username.isNotEmpty;
+
   factory WebDAVConfig.fromJson(Map<String, dynamic>? json) {
-    if (json == null) {
-      return WebDAVConfig(url: '', username: '');
-    }
-    
+    if (json == null) return WebDAVConfig();
     return WebDAVConfig(
       url: json['url'] ?? '',
       username: json['username'] ?? '',
+      password: json['password'] ?? '',
     );
   }
-  
+
+  Map<String, dynamic> toJson() => {
+    'url': url,
+    'username': username,
+    'password': password,
+  };
+}
+
+class ASRModelConfig {
+  final String name;
+  final String type; // 'websocket', 'http', 'local_funasr'
+  final String url;
+  final String key;
+  final String? modelName;
+  final String? protocol; // WebSocket 协议路径
+  final int httpAsrIntervalSec; // HTTP ASR 发送音频间隔（秒）
+
+  ASRModelConfig({
+    required this.name,
+    this.type = 'http',
+    required this.url,
+    this.key = '',
+    this.modelName,
+    this.protocol,
+    this.httpAsrIntervalSec = 3,
+  });
+
+  factory ASRModelConfig.fromJson(Map<String, dynamic> json) {
+    return ASRModelConfig(
+      name: json['name'] ?? '',
+      type: json['type'] ?? 'http',
+      url: json['url'] ?? '',
+      key: json['key'] ?? '',
+      modelName: json['model_name'],
+      protocol: json['protocol'],
+      httpAsrIntervalSec: json['http_asr_interval_sec'] as int? ?? 3,
+    );
+  }
+
   Map<String, dynamic> toJson() {
     return {
+      'name': name,
+      'type': type,
       'url': url,
-      'username': username,
+      'key': key,
+      'model_name': modelName,
+      'protocol': protocol,
+      'http_asr_interval_sec': httpAsrIntervalSec,
     };
   }
 }
+
+class LLMModelConfig {
+  final String name;
+  final String url;
+  final String key;
+  final String modelName;
+
+  LLMModelConfig({
+    required this.name,
+    required this.url,
+    required this.key,
+    this.modelName = 'qwen3.5-plus',
+  });
+
+  factory LLMModelConfig.fromJson(Map<String, dynamic> json) {
+    return LLMModelConfig(
+      name: json['name'] ?? '',
+      url: json['url'] ?? '',
+      key: json['key'] ?? '',
+      modelName: json['model_name'] ?? 'qwen3.5-plus',
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
+      'url': url,
+      'key': key,
+      'model_name': modelName,
+    };
+  }
+}
+
+// 向后兼容
+typedef SummaryModelConfig = LLMModelConfig;

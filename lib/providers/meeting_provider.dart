@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:meeting_note/models/meeting.dart';
+import 'package:yanji/models/meeting.dart';
 
 class MeetingProvider with ChangeNotifier {
   List<Meeting> _meetings = [];

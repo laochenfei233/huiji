@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 添加录音权限 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.INTERNET"/>
+    
     <application
-        android:label="meeting_note"
+        android:label="言记"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

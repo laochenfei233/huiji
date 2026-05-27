@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:meeting_note/models/meeting.dart';
-import 'package:meeting_note/services/storage_service.dart';
+import 'package:yanji/models/meeting.dart';
+import 'package:yanji/services/storage_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -20,13 +20,31 @@ class _ShareMeetingScreenState extends State<ShareMeetingScreen> {
   bool _shareSummary = true;
   bool _shareWithParticipants = true;
   String _shareFormat = 'txt';
+  String _transcript = '';
+  String _summary = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadContent();
+  }
+
+  Future<void> _loadContent() async {
+    if (widget.meeting.id == null) return;
+    final detail = await _storageService.loadMeetingDetail(widget.meeting.id!);
+    if (detail != null && mounted) {
+      setState(() {
+        _transcript = detail.transcript;
+        _summary = detail.summary;
+      });
+    }
+  }
 
   Future<void> _shareMeeting() async {
     try {
-      // Generate content to share based on user selections
       String content = '会议标题: ${widget.meeting.title}\n';
       content += '会议时间: ${widget.meeting.date}\n\n';
-      
+
       if (_shareWithParticipants && widget.meeting.participants.isNotEmpty) {
         content += '参与者:\n';
         for (var participant in widget.meeting.participants) {
@@ -34,13 +52,13 @@ class _ShareMeetingScreenState extends State<ShareMeetingScreen> {
         }
         content += '\n';
       }
-      
-      if (_shareTranscript) {
-        content += '会议转录:\n${widget.meeting.transcript}\n\n';
+
+      if (_shareTranscript && _transcript.isNotEmpty) {
+        content += '会议转录:\n$_transcript\n\n';
       }
-      
-      if (_shareSummary) {
-        content += '会议摘要:\n${widget.meeting.summary}\n\n';
+
+      if (_shareSummary && _summary.isNotEmpty) {
+        content += '会议摘要:\n$_summary\n\n';
       }
       
       // Save content to a temporary file
@@ -57,7 +75,7 @@ class _ShareMeetingScreenState extends State<ShareMeetingScreen> {
       }
       
       // Share the file
-      await Share.shareFiles([filePath], text: '分享会议记录: ${widget.meeting.title}');
+      await Share.shareXFiles([XFile(filePath)], text: '分享会议记录: ${widget.meeting.title}');
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:meeting_note/screens/meeting_detail_screen.dart';
-import 'package:meeting_note/screens/recording_screen.dart';
-import 'package:meeting_note/models/meeting.dart';
-import 'package:meeting_note/services/storage_service.dart';
+import 'package:yanji/screens/edit_meeting_screen.dart';
+import 'package:yanji/screens/meeting_detail_screen.dart';
+import 'package:yanji/screens/recording_screen.dart';
+import 'package:yanji/models/meeting.dart';
+import 'package:yanji/services/storage_service.dart';
 
 class MeetingListScreen extends StatefulWidget {
   const MeetingListScreen({super.key});
@@ -15,13 +17,42 @@ class _MeetingListScreenState extends State<MeetingListScreen> {
   final StorageService _storageService = StorageService();
   final TextEditingController _searchController = TextEditingController();
   List<Meeting>? _filteredMeetings;
+  List<Meeting> _allMeetings = [];
   bool _isSearching = false;
   String? _databaseError;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_filterMeetings);
+    _loadMeetings();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _loadMeetings();
+  }
+
+  Future<void> _loadMeetings() async {
+    try {
+      final meetings = await _storageService.loadMeetings();
+      if (mounted) {
+        setState(() {
+          _allMeetings = meetings;
+          _isLoading = false;
+          _databaseError = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _databaseError = e.toString();
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   @override
@@ -32,13 +63,14 @@ class _MeetingListScreenState extends State<MeetingListScreen> {
   }
 
   Future<void> _filterMeetings() async {
+    final query = _searchController.text;
     setState(() {
-      _isSearching = _searchController.text.isNotEmpty;
+      _isSearching = query.isNotEmpty;
     });
-    
+
     if (_isSearching) {
       try {
-        final meetings = await _storageService.searchMeetings(_searchController.text);
+        final meetings = await _storageService.searchMeetings(query);
         setState(() {
           _filteredMeetings = meetings;
           _databaseError = null;
@@ -51,8 +83,94 @@ class _MeetingListScreenState extends State<MeetingListScreen> {
     }
   }
 
+  void _showMeetingContextMenu(Meeting meeting) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit),
+              title: const Text('编辑'),
+              onTap: () {
+                Navigator.pop(context);
+                _editMeeting(meeting);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.red),
+              title: const Text('删除', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Navigator.pop(context);
+                _deleteMeeting(meeting);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _editMeeting(Meeting meeting) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EditMeetingScreen(meeting: meeting),
+      ),
+    );
+    if (result != null) {
+      _loadMeetings();
+    }
+  }
+
+  void _deleteMeeting(Meeting meeting) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认删除'),
+        content: Text('确定要删除会议"${meeting.title}"吗？此操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true && mounted) {
+      try {
+        await _storageService.deleteMeeting(meeting.id!);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('会议已删除')),
+          );
+          _loadMeetings();
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('删除失败: $e')),
+          );
+        }
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    // 每次 build 都刷新数据，确保导航回来时显示最新
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadMeetings();
+    });
+
+    final meetings = _isSearching ? (_filteredMeetings ?? []) : _allMeetings;
+
     return Scaffold(
       body: Column(
         children: [
@@ -85,172 +203,100 @@ class _MeetingListScreenState extends State<MeetingListScreen> {
             ),
           ),
           Expanded(
-            child: FutureBuilder<List<Meeting>>(
-              future: _isSearching 
-                  ? Future.value(_filteredMeetings) 
-                  : _storageService.loadMeetings(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                } else if (snapshot.hasError) {
-                  return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.error_outline,
-                            size: 64,
-                            color: Colors.red,
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            '数据库错误',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            snapshot.error.toString(),
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.grey,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            '请确保系统已安装SQLite库。在Debian/Ubuntu系统上，可以运行:\n\nsudo apt-get install libsqlite3-0',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                  // 确保在空状态时也能正确显示FloatingActionButton
-                  return const Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.meeting_room_outlined,
-                          size: 64,
-                          color: Colors.grey,
-                        ),
-                        SizedBox(height: 16),
-                        Text(
-                          '暂无会议记录',
-                          style: TextStyle(
-                            fontSize: 18,
-                            color: Colors.grey,
-                          ),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          '点击右下角按钮开始新会议',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                } else {
-                  final meetings = snapshot.data!;
-                  return ListView.separated(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    itemCount: meetings.length,
-                    separatorBuilder: (context, index) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final meeting = meetings[index];
-                      return Card(
-                        elevation: 2,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12.0),
-                        ),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.all(16.0),
-                          title: Text(
-                            meeting.title,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                          ),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _databaseError != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              const SizedBox(height: 4),
-                              Text(
-                                '${meeting.date.year}-${meeting.date.month.toString().padLeft(2, '0')}-${meeting.date.day.toString().padLeft(2, '0')} ${meeting.date.hour.toString().padLeft(2, '0')}:${meeting.date.minute.toString().padLeft(2, '0')}',
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                ),
-                              ),
-                              if (meeting.summary.isNotEmpty) ...[
-                                const SizedBox(height: 8),
-                                Text(
-                                  meeting.summary.length > 100 
-                                      ? '${meeting.summary.substring(0, 100)}...' 
-                                      : meeting.summary,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
+                              const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                              const SizedBox(height: 16),
+                              const Text('数据库错误', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 8),
+                              Text(_databaseError!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: Colors.grey)),
                             ],
                           ),
-                          trailing: const Icon(Icons.arrow_forward_ios),
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => MeetingDetailScreen(meetingId: meeting.id!),
-                              ),
-                            );
-                          },
                         ),
-                      );
-                    }
-                  );
-                }
-              }
-            ),
-          ),
-        ],
-      ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          FloatingActionButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const RecordingScreen(),
-                ),
-              ).then((_) => setState(() {}));
-            },
-            child: const Icon(Icons.add),
-          ),
-          const SizedBox(height: 8),
-          FloatingActionButton(
-            onPressed: () {
-              setState(() {});
-            },
-            child: const Icon(Icons.refresh),
+                      )
+                    : meetings.isEmpty
+                        ? const Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.meeting_room_outlined, size: 64, color: Colors.grey),
+                                SizedBox(height: 16),
+                                Text('暂无会议记录', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                                SizedBox(height: 8),
+                                Text('点击右下角按钮开始新会议', style: TextStyle(fontSize: 14, color: Colors.grey)),
+                              ],
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                            itemCount: meetings.length,
+                            separatorBuilder: (context, index) => const SizedBox(height: 8),
+                            itemBuilder: (context, index) {
+                              final meeting = meetings[index];
+                              return GestureDetector(
+                                onSecondaryTapUp: (kIsWeb || !kIsWeb)
+                                    ? (details) => _showMeetingContextMenu(meeting)
+                                    : null,
+                                child: Card(
+                                  elevation: 2,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12.0),
+                                  ),
+                                  child: ListTile(
+                                    contentPadding: const EdgeInsets.all(16.0),
+                                    title: Text(
+                                      meeting.title,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    subtitle: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          '${meeting.date.year}-${meeting.date.month.toString().padLeft(2, '0')}-${meeting.date.day.toString().padLeft(2, '0')} ${meeting.date.hour.toString().padLeft(2, '0')}:${meeting.date.minute.toString().padLeft(2, '0')}',
+                                          style: const TextStyle(fontSize: 14),
+                                        ),
+                                        if (meeting.summary != null && meeting.summary!.isNotEmpty) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            meeting.summary!.replaceAll(RegExp(r'[#*\n\r]'), '').trim().length > 10
+                                                ? '${meeting.summary!.replaceAll(RegExp(r'[#*\n\r]'), '').trim().substring(0, 10)}…'
+                                                : meeting.summary!.replaceAll(RegExp(r'[#*\n\r]'), '').trim(),
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                    trailing: const Icon(Icons.arrow_forward_ios),
+                                    onTap: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => MeetingDetailScreen(meetingId: meeting.id!),
+                                        ),
+                                      );
+                                    },
+                                    onLongPress: () => _showMeetingContextMenu(meeting),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
           ),
         ],
       ),

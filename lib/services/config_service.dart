@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:meeting_note/services/asr_service.dart';
-import 'package:meeting_note/services/summary_service.dart';
-import 'package:meeting_note/utils/config_loader.dart';
+import 'package:yanji/utils/config_loader.dart';
 
 class ConfigService {
   static const String _asrModelsKey = 'asr_models';
@@ -81,7 +79,7 @@ class ConfigService {
         return S3Config.fromJson(jsonMap);
       } catch (e) {
         // If parsing fails, return default config
-        return S3Config(bucket: '', region: '');
+        return S3Config();
       }
     }
     
@@ -107,7 +105,7 @@ class ConfigService {
         return WebDAVConfig.fromJson(jsonMap);
       } catch (e) {
         // If parsing fails, return default config
-        return WebDAVConfig(url: '', username: '');
+        return WebDAVConfig();
       }
     }
     

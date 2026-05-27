@@ -1,47 +1,42 @@
 import 'dart:convert';
-import 'package:meeting_note/models/template.dart';
+import 'package:yanji/models/template.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class TemplateService {
   static const String _templatesKey = 'meeting_summary_templates';
   static const String _defaultTemplatesKey = 'default_templates_loaded';
   
-  // 默认模板
+  // 内置模板（非默认，用户可手动设为默认）
   static final List<Template> _defaultTemplates = [
     Template(
       id: 'executive_summary',
-      name: ' executive摘要',
-      description: '生成简洁明了的 executive摘要，突出关键决策和行动项',
-      prompt: '请根据以下会议内容生成 executive摘要，包含：1.会议主题 2.关键决策 3.重要讨论点 4.后续行动项\n\n会议内容：{{content}}',
-      isDefault: true,
+      name: 'Executive 摘要',
+      description: '生成简洁明了的摘要，突出关键决策和行动项',
+      prompt: '请根据以下会议内容生成摘要，包含：1.会议主题 2.关键决策 3.重要讨论点 4.后续行动项\n\n会议内容：{{content}}',
     ),
     Template(
       id: 'detailed_summary',
       name: '详细纪要',
       description: '生成包含所有讨论内容的详细会议纪要',
       prompt: '请根据以下会议内容生成详细会议纪要，包含：1.会议基本信息 2.参会人员 3.议程和讨论内容 4.决策事项 5.行动项和负责人 6.下次会议安排（如果有）\n\n会议内容：{{content}}',
-      isDefault: true,
     ),
     Template(
       id: 'action_items',
       name: '行动项清单',
       description: '提取会议中的所有行动项和责任人',
       prompt: '请从以下会议内容中提取所有行动项，为每个行动项指定责任人和截止日期（如果提及），以清单形式输出：\n\n会议内容：{{content}}',
-      isDefault: true,
     ),
     Template(
       id: 'decision_log',
       name: '决策日志',
       description: '专门记录会议中做出的重要决策',
       prompt: '请从以下会议内容中提取所有决策事项，包括决策背景、决策内容和决策理由：\n\n会议内容：{{content}}',
-      isDefault: true,
     ),
     Template(
       id: 'q_and_a',
       name: '问答整理',
       description: '整理会议中的问答内容',
       prompt: '请整理以下会议内容中的问答部分，按问题分类并给出回答：\n\n会议内容：{{content}}',
-      isDefault: true,
     ),
   ];
 
@@ -72,13 +67,11 @@ class TemplateService {
     await prefs.setString(_templatesKey, templatesJson);
   }
 
-  /// 确保默认模板已加载
+  /// 确保默认模板已加载（不再将默认模板写入 SharedPreferences，避免重复）
   Future<void> ensureDefaultTemplates() async {
     final prefs = await SharedPreferences.getInstance();
     final isLoaded = prefs.getBool(_defaultTemplatesKey) ?? false;
-    
     if (!isLoaded) {
-      await saveCustomTemplates(_defaultTemplates);
       await prefs.setBool(_defaultTemplatesKey, true);
     }
   }
@@ -107,12 +100,13 @@ class TemplateService {
     await saveCustomTemplates(templates);
   }
 
-  /// 获取所有模板（默认+自定义）
+  /// 获取所有模板（默认+自定义，去重）
   Future<List<Template>> getAllTemplates() async {
     await ensureDefaultTemplates();
-    final defaultTemplates = _defaultTemplates;
-    final customTemplates = await loadCustomTemplates();
-    return [...defaultTemplates, ...customTemplates];
+    final defaultIds = _defaultTemplates.map((t) => t.id).toSet();
+    final allRaw = await loadCustomTemplates();
+    final customTemplates = allRaw.where((t) => !defaultIds.contains(t.id)).toList();
+    return [..._defaultTemplates, ...customTemplates];
   }
 
   /// 根据ID获取模板
@@ -123,5 +117,25 @@ class TemplateService {
     } catch (e) {
       return null;
     }
+  }
+
+  static const String _defaultTemplateIdKey = 'default_template_id';
+
+  /// 设置默认模板
+  Future<void> setDefaultTemplate(String templateId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_defaultTemplateIdKey, templateId);
+  }
+
+  /// 获取当前默认模板 ID
+  Future<String?> getDefaultTemplateId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_defaultTemplateIdKey);
+  }
+
+  /// 取消默认模板
+  Future<void> clearDefaultTemplate() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_defaultTemplateIdKey);
   }
 }

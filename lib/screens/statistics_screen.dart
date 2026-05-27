@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:meeting_note/services/storage_service.dart';
-import 'package:meeting_note/models/meeting.dart';
+import 'package:yanji/services/storage_service.dart';
+import 'package:yanji/models/meeting.dart';
 
 class StatisticsScreen extends StatefulWidget {
   const StatisticsScreen({super.key});
@@ -32,7 +32,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
     
     for (var meeting in meetings) {
       // Count words in transcript
-      totalWords += meeting.transcript.split(RegExp(r'\s+')).length;
+      totalWords += (meeting.transcript ?? '').split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
       totalParticipants += meeting.participants.length;
     }
     
@@ -48,7 +48,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('统计信息'),
+        title: const Text('会议统计'),
       ),
       body: FutureBuilder<List<Meeting>>(
         future: _meetingsFuture,
@@ -63,11 +63,6 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    '会议统计',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 20),
                   Row(
                     children: [
                       Expanded(
@@ -170,7 +165,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
                       itemCount: snapshot.data!.length > 5 ? 5 : snapshot.data!.length,
                       itemBuilder: (context, index) {
                         final meeting = snapshot.data![index];
-                        final wordCount = meeting.transcript.split(RegExp(r'\s+')).length;
+                        final wordCount = (meeting.transcript ?? '').split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
                         return Card(
                           child: ListTile(
                             title: Text(meeting.title),

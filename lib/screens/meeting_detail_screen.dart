@@ -1,19 +1,13 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:meeting_note/models/meeting.dart';
-import 'package:meeting_note/services/storage_service.dart';
-import 'package:meeting_note/services/summary_service.dart';
-import 'package:meeting_note/services/template_service.dart';
-import 'package:meeting_note/services/qna_service.dart';
-import 'package:meeting_note/utils/config_loader.dart';
-import 'package:meeting_note/models/template.dart';
-import 'package:meeting_note/screens/template_management_screen.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:share_plus/share_plus.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:meeting_note/services/asr_service.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:yanji/models/meeting.dart';
+import 'package:yanji/models/template.dart';
+import 'package:yanji/screens/template_management_screen.dart';
+import 'package:yanji/services/llm_service.dart';
+import 'package:yanji/services/storage_service.dart';
+import 'package:yanji/services/template_service.dart';
+import 'package:yanji/utils/config_loader.dart';
+import 'package:yanji/utils/export_helper.dart';
 
 class MeetingDetailScreen extends StatefulWidget {
   final int meetingId;
@@ -26,19 +20,16 @@ class MeetingDetailScreen extends StatefulWidget {
 
 class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
   final StorageService _storageService = StorageService();
-  final SummaryService _summaryService = SummaryService();
   final TemplateService _templateService = TemplateService();
-  final QnAService _qnaService = QnAService();
   late Future<AppConfig> _configFuture;
+  LLMService? _llmService;
   Meeting? _meeting;
   bool _isLoading = true;
   String _summary = '';
   bool _isGeneratingSummary = false;
   List<Template> _templates = [];
-  Template? _selectedTemplate;
-  final TextEditingController _questionController = TextEditingController();
-  String _answer = '';
-  bool _isGeneratingAnswer = false;
+  String? _selectedTemplateId;
+  bool _isTranscriptExpanded = false;
 
   @override
   void initState() {
@@ -50,10 +41,28 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
 
   Future<void> _loadMeeting() async {
     try {
-      final meeting = await _storageService.getMeetingById(widget.meetingId);
+      final detail = await _storageService.loadMeetingDetail(widget.meetingId);
+      if (detail == null) {
+        setState(() {
+          _isLoading = false;
+        });
+        return;
+      }
       setState(() {
-        _meeting = meeting;
+        _meeting = Meeting(
+          id: detail.meeting.id,
+          title: detail.meeting.title,
+          date: detail.meeting.date,
+          transcript: detail.transcript,
+          summary: detail.summary,
+          participants: detail.meeting.participants,
+          recordingDuration: detail.meeting.recordingDuration,
+          folderName: detail.meeting.folderName,
+        );
         _isLoading = false;
+        if (detail.summary.isNotEmpty) {
+          _summary = detail.summary;
+        }
       });
     } catch (e) {
       setState(() {
@@ -67,13 +76,25 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
     }
   }
 
+  Template? get _selectedTemplate {
+    if (_selectedTemplateId == null || _templates.isEmpty) return null;
+    try {
+      return _templates.firstWhere((t) => t.id == _selectedTemplateId);
+    } catch (_) {
+      return _templates.isNotEmpty ? _templates.first : null;
+    }
+  }
+
   Future<void> _loadTemplates() async {
     try {
       final templates = await _templateService.getAllTemplates();
+      if (!mounted) return;
       setState(() {
         _templates = templates;
-        if (templates.isNotEmpty) {
-          _selectedTemplate = templates.first;
+        if (templates.isEmpty) {
+          _selectedTemplateId = null;
+        } else if (_selectedTemplateId == null || !_templates.any((t) => t.id == _selectedTemplateId)) {
+          _selectedTemplateId = templates.first.id;
         }
       });
     } catch (e) {
@@ -95,18 +116,41 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
 
     try {
       final config = await _configFuture;
-      final summaryModel = config.summaryModels.first; // 使用第一个摘要模型
+      final summaryModel = config.summaryModels.first;
+      _llmService = LLMService(
+        baseUrl: summaryModel.url,
+        apiKey: summaryModel.key,
+        model: summaryModel.modelName,
+      );
 
-      final summary = await _summaryService.generateSummaryWithTemplate(
-        _meeting!.transcript,
-        _selectedTemplate!,
-        summaryModel as ASRModelConfig,
+      // 使用选中模板的 prompt
+      final templatePrompt = _selectedTemplate!.prompt
+          .replaceAll('{{content}}', _meeting!.transcript ?? '');
+
+      final summary = await _llmService!.generateSummary(
+        transcript: _meeting!.transcript ?? '',
+        title: _meeting!.title,
+        participants: _meeting!.participants.map((p) => p.name).toList(),
+        customPrompt: templatePrompt,
       );
 
       setState(() {
         _summary = summary;
         _isGeneratingSummary = false;
       });
+
+      // 保存纪要到文件
+      await _storageService.saveSummary(_meeting!.id!, summary);
+      _meeting = Meeting(
+        id: _meeting!.id,
+        title: _meeting!.title,
+        date: _meeting!.date,
+        transcript: _meeting!.transcript,
+        summary: summary,
+        participants: _meeting!.participants,
+        recordingDuration: _meeting!.recordingDuration,
+        folderName: _meeting!.folderName,
+      );
     } catch (e) {
       setState(() {
         _summary = '生成会议纪要失败: $e';
@@ -115,100 +159,63 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
     }
   }
 
-  Future<void> _askQuestion() async {
-    if (_meeting == null || _questionController.text.isEmpty) return;
-
-    setState(() {
-      _isGeneratingAnswer = true;
-      _answer = '正在生成答案...';
-    });
-
-    try {
-      final config = await _configFuture;
-      final summaryModel = config.summaryModels.first; // 使用第一个摘要模型
-
-      final answer = await _qnaService.answerQuestion(
-        _meeting!.transcript,
-        _questionController.text,
-        summaryModel as ASRModelConfig,
-      );
-
-      setState(() {
-        _answer = answer;
-        _isGeneratingAnswer = false;
-      });
-    } catch (e) {
-      setState(() {
-        _answer = '回答问题失败: $e';
-        _isGeneratingAnswer = false;
-      });
-    }
-  }
-
-  Future<void> _exportToPDF() async {
+  void _showQADialog() {
     if (_meeting == null) return;
 
-    try {
-      final pdf = pw.Document();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) => _QADialog(
+        meeting: _meeting!,
+        summary: _summary,
+        configFuture: _configFuture,
+      ),
+    );
+  }
 
-      pdf.addPage(
-        pw.Page(
-          build: (pw.Context context) {
-            return pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                pw.Header(
-                  level: 0,
-                  child: pw.Text(_meeting!.title),
-                ),
-                pw.SizedBox(height: 20),
-                pw.Text('会议时间: ${_meeting!.date.toString()}'),
-                pw.SizedBox(height: 20),
-                pw.Header(
-                  level: 2,
-                  child: pw.Text('会议原文'),
-                ),
-                pw.Text(_meeting!.transcript),
-                pw.SizedBox(height: 20),
-                pw.Header(
-                  level: 2,
-                  child: pw.Text('会议纪要'),
-                ),
-                pw.Text(_summary.isEmpty ? '暂无纪要' : _summary),
-              ],
-            );
-          },
-        ),
-      );
+  void _deleteMeeting() async {
+    if (_meeting == null) return;
 
-      final output = await getTemporaryDirectory();
-      final file = await pdf.save();
-      final filePath = '${output.path}/${_meeting!.title}.pdf';
-      final pdfFile = await File(filePath).writeAsBytes(file);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认删除'),
+        content: Text('确定要删除会议"${_meeting!.title}"吗？此操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
 
-      if (mounted) {
-        // 检查是否在Web平台上运行
-        if (kIsWeb) {
-          // 在Web上使用shareXFiles方法
-          await Share.shareXFiles([XFile(pdfFile.path)], text: '会议记录: ${_meeting!.title}');
-        } else {
-          // 在其他平台上使用shareFiles方法
-          // 修复Web编译错误，只在非Web平台使用shareFiles
-          // await Share.shareFiles([pdfFile.path], text: '会议记录: ${_meeting!.title}');
+    if (confirm == true && mounted) {
+      try {
+        await _storageService.deleteMeeting(_meeting!.id!);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('会议已删除')),
+          );
+          Navigator.pop(context);
         }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('导出PDF失败: $e')),
-        );
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('删除失败: $e')),
+          );
+        }
       }
     }
   }
 
   @override
   void dispose() {
-    _questionController.dispose();
     super.dispose();
   }
 
@@ -218,10 +225,12 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
       appBar: AppBar(
         title: const Text('会议详情'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.picture_as_pdf),
-            onPressed: _exportToPDF,
-          ),
+          if (_meeting != null)
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: '删除会议',
+              onPressed: _deleteMeeting,
+            ),
         ],
       ),
       body: _isLoading
@@ -254,7 +263,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                           ),
                         ),
                         const SizedBox(height: 16),
-                        
+
                         // 模板选择和纪要生成
                         Card(
                           child: Padding(
@@ -262,9 +271,25 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text(
-                                  '会议纪要',
-                                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                Row(
+                                  children: [
+                                    const Text(
+                                      '会议纪要',
+                                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                    ),
+                                    const Spacer(),
+                                    if (_summary.isNotEmpty)
+                                      IconButton(
+                                        icon: const Icon(Icons.download, size: 20),
+                                        onPressed: () => ExportHelper.showExportMenu(
+                                          context,
+                                          title: _meeting!.title,
+                                          summary: _summary,
+                                          transcript: _meeting!.transcript,
+                                        ),
+                                        tooltip: '导出纪要',
+                                      ),
+                                  ],
                                 ),
                                 const SizedBox(height: 16),
                                 Row(
@@ -272,35 +297,25 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                                     const Text('选择模板:'),
                                     const SizedBox(width: 16),
                                     Expanded(
-                                      child: DropdownButton<Template>(
-                                        value: _selectedTemplate,
-                                        items: _templates.map((template) {
-                                          return DropdownMenuItem(
-                                            value: template,
-                                            child: Row(
-                                              children: [
-                                                Expanded(
+                                      child: _templates.isEmpty
+                                          ? const Text('加载中...')
+                                          : DropdownButton<String>(
+                                              value: _selectedTemplateId,
+                                              isExpanded: true,
+                                              items: _templates.map((template) {
+                                                return DropdownMenuItem(
+                                                  value: template.id,
                                                   child: Text(template.name),
-                                                ),
-                                                if (template.isDefault)
-                                                  const Chip(
-                                                    label: Text(
-                                                      '默认',
-                                                      style: TextStyle(fontSize: 10),
-                                                    ),
-                                                    backgroundColor: Colors.blue,
-                                                    labelStyle: TextStyle(color: Colors.white),
-                                                  ),
-                                              ],
+                                                );
+                                              }).toList(),
+                                              onChanged: (String? newValue) {
+                                                if (newValue != null) {
+                                                  setState(() {
+                                                    _selectedTemplateId = newValue;
+                                                  });
+                                                }
+                                              },
                                             ),
-                                          );
-                                        }).toList(),
-                                        onChanged: (Template? newValue) {
-                                          setState(() {
-                                            _selectedTemplate = newValue;
-                                          });
-                                        },
-                                      ),
                                     ),
                                   ],
                                 ),
@@ -333,7 +348,8 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                                 ),
                                 const SizedBox(height: 16),
                                 Container(
-                                  height: 200,
+                                  constraints: const BoxConstraints(minHeight: 100, maxHeight: 300),
+                                  width: double.infinity,
                                   decoration: BoxDecoration(
                                     border: Border.all(color: Colors.grey),
                                     borderRadius: BorderRadius.circular(8),
@@ -341,7 +357,9 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                                   child: SingleChildScrollView(
                                     child: Padding(
                                       padding: const EdgeInsets.all(8.0),
-                                      child: Text(_summary.isEmpty ? '点击"生成纪要"按钮生成会议纪要' : _summary),
+                                      child: _summary.isEmpty
+                                          ? const Text('点击"生成纪要"按钮生成会议纪要', style: TextStyle(color: Colors.grey))
+                                          : MarkdownBody(data: _summary),
                                     ),
                                   ),
                                 ),
@@ -350,77 +368,44 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                           ),
                         ),
                         const SizedBox(height: 16),
-                        
-                        // 问答功能
+
+                        // 智能问答按钮
                         Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  '会议问答',
-                                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                                ),
-                                const SizedBox(height: 16),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextField(
-                                        controller: _questionController,
-                                        decoration: const InputDecoration(
-                                          hintText: '请输入关于会议内容的问题...',
-                                          border: OutlineInputBorder(),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    ElevatedButton(
-                                      onPressed: _isGeneratingAnswer ? null : _askQuestion,
-                                      child: _isGeneratingAnswer
-                                          ? const SizedBox(
-                                              width: 20,
-                                              height: 20,
-                                              child: CircularProgressIndicator(strokeWidth: 2),
-                                            )
-                                          : const Text('提问'),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 16),
-                                Container(
-                                  height: 200,
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: Colors.grey),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: SingleChildScrollView(
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(8.0),
-                                      child: Text(_answer.isEmpty ? '请输入问题并点击"提问"按钮' : _answer),
-                                    ),
-                                  ),
-                                ),
-                              ],
+                          child: ListTile(
+                            leading: const Icon(Icons.chat_bubble_outline),
+                            title: const Text(
+                              '智能问答',
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                             ),
+                            subtitle: const Text('可以询问关于会议内容的任何问题'),
+                            trailing: const Icon(Icons.arrow_forward_ios),
+                            onTap: _showQADialog,
                           ),
                         ),
                         const SizedBox(height: 16),
-                        
-                        // 会议原文
+
+                        // 会议原文（可折叠）
                         Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
+                          child: Column(
+                            children: [
+                              ListTile(
+                                leading: Icon(_isTranscriptExpanded
+                                    ? Icons.expand_less
+                                    : Icons.expand_more),
+                                title: const Text(
                                   '会议原文',
                                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                                 ),
-                                const SizedBox(height: 16),
+                                onTap: () {
+                                  setState(() {
+                                    _isTranscriptExpanded = !_isTranscriptExpanded;
+                                  });
+                                },
+                              ),
+                              if (_isTranscriptExpanded)
                                 Container(
                                   height: 300,
+                                  margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                                   decoration: BoxDecoration(
                                     border: Border.all(color: Colors.grey),
                                     borderRadius: BorderRadius.circular(8),
@@ -428,12 +413,11 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                                   child: SingleChildScrollView(
                                     child: Padding(
                                       padding: const EdgeInsets.all(8.0),
-                                      child: Text(_meeting!.transcript),
+                                      child: Text(_meeting!.transcript ?? ''),
                                     ),
                                   ),
                                 ),
-                              ],
-                            ),
+                            ],
                           ),
                         ),
                       ],
@@ -442,4 +426,292 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                 ),
     );
   }
+}
+
+/// 问答对话框
+class _QADialog extends StatefulWidget {
+  final Meeting meeting;
+  final String summary;
+  final Future<AppConfig> configFuture;
+
+  const _QADialog({
+    required this.meeting,
+    required this.summary,
+    required this.configFuture,
+  });
+
+  @override
+  State<_QADialog> createState() => _QADialogState();
+}
+
+class _QADialogState extends State<_QADialog> {
+  final TextEditingController _questionController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final List<_ChatMessage> _messages = [];
+  bool _isGenerating = false;
+  LLMService? _llmService;
+
+  @override
+  void initState() {
+    super.initState();
+    _initLLM();
+  }
+
+  Future<void> _initLLM() async {
+    try {
+      final config = await widget.configFuture;
+      final summaryModel = config.summaryModels.first;
+      _llmService = LLMService(
+        baseUrl: summaryModel.url,
+        apiKey: summaryModel.key,
+        model: summaryModel.modelName,
+      );
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  Future<void> _askQuestion() async {
+    if (_questionController.text.isEmpty || _llmService == null) return;
+
+    final question = _questionController.text.trim();
+    _questionController.clear();
+
+    setState(() {
+      _messages.add(_ChatMessage(message: question, isUser: true));
+      _isGenerating = true;
+    });
+
+    _scrollToBottom();
+
+    try {
+      final answer = await _llmService!.askQuestion(
+        question: question,
+        transcript: widget.meeting.transcript ?? '',
+        summary: widget.summary.isNotEmpty ? widget.summary : null,
+      );
+
+      setState(() {
+        _messages.add(_ChatMessage(message: answer, isUser: false));
+        _isGenerating = false;
+      });
+
+      _scrollToBottom();
+    } catch (e) {
+      setState(() {
+        _messages.add(_ChatMessage(message: '回答失败: $e', isUser: false));
+        _isGenerating = false;
+      });
+    }
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _questionController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      minChildSize: 0.4,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: const BoxDecoration(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: Column(
+            children: [
+              // 标题栏
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.chat_bubble_outline, size: 20),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        '智能问答',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+              // 消息列表
+              Expanded(
+                child: _messages.isEmpty
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.question_answer, size: 48, color: Colors.grey.shade400),
+                              const SizedBox(height: 16),
+                              Text(
+                                '询问关于会议内容的任何问题',
+                                style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
+                              ),
+                              const SizedBox(height: 24),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                alignment: WrapAlignment.center,
+                                children: [
+                                  _buildSuggestionChip('主要结论是什么？'),
+                                  _buildSuggestionChip('有哪些待办事项？'),
+                                  _buildSuggestionChip('谁负责哪些任务？'),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.all(16),
+                        itemCount: _messages.length + (_isGenerating ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index == _messages.length) {
+                            return _buildTypingIndicator();
+                          }
+                          final msg = _messages[index];
+                          return _buildMessageBubble(msg);
+                        },
+                      ),
+              ),
+              // 输入框
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: Colors.grey.shade300)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _questionController,
+                        decoration: InputDecoration(
+                          hintText: '输入你的问题...',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        ),
+                        onSubmitted: (_) => _askQuestion(),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: _isGenerating ? null : _askQuestion,
+                      icon: _isGenerating
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.send),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSuggestionChip(String text) {
+    return ActionChip(
+      label: Text(text, style: const TextStyle(fontSize: 13)),
+      onPressed: () {
+        _questionController.text = text;
+        _askQuestion();
+      },
+    );
+  }
+
+  Widget _buildMessageBubble(_ChatMessage msg) {
+    final isUser = msg.isUser;
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: isUser ? Colors.blue.shade50 : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: isUser
+            ? Text(msg.message)
+            : MarkdownBody(
+                data: msg.message,
+                styleSheet: MarkdownStyleSheet(
+                  p: TextStyle(fontSize: 14, color: Colors.grey.shade800),
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildTypingIndicator() {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.grey.shade400),
+            ),
+            const SizedBox(width: 8),
+            Text('思考中...', style: TextStyle(color: Colors.grey.shade500)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatMessage {
+  final String message;
+  final bool isUser;
+
+  _ChatMessage({required this.message, required this.isUser});
 }

@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:meeting_note/models/meeting.dart';
-import 'package:meeting_note/services/storage_service.dart';
+import 'package:yanji/models/meeting.dart';
+import 'package:yanji/services/storage_service.dart';
 
 class ImportScreen extends StatefulWidget {
   const ImportScreen({super.key});
@@ -30,7 +30,7 @@ class _ImportScreenState extends State<ImportScreen> {
       });
     } catch (e) {
       setState(() {
-        _status = 'Failed to load files: $e';
+        _status = '加载文件失败: $e';
       });
     }
   }
@@ -39,22 +39,22 @@ class _ImportScreenState extends State<ImportScreen> {
     try {
       // Simplified file picking for demo purposes
       setState(() {
-        _status = 'File import functionality needs to be implemented';
+        _status = '文件导入功能暂未实现';
       });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('File import functionality needs to be implemented')),
+          const SnackBar(content: Text('文件导入功能暂未实现')),
         );
       }
     } catch (e) {
       setState(() {
-        _status = 'Import failed: $e';
+        _status = '导入失败: $e';
       });
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Import failed: $e')),
+          SnackBar(content: Text('导入失败: $e')),
         );
       }
     }
@@ -64,7 +64,7 @@ class _ImportScreenState extends State<ImportScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Import Meeting'),
+        title: const Text('导入会议'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -74,19 +74,19 @@ class _ImportScreenState extends State<ImportScreen> {
             ElevatedButton.icon(
               onPressed: _pickAndImportFile,
               icon: const Icon(Icons.upload_file),
-              label: const Text('Select File to Import'),
+              label: const Text('选择文件导入'),
             ),
             const SizedBox(height: 20),
             Text(_status),
             const SizedBox(height: 20),
             const Text(
-              'Recently Imported Files',
+              '最近导入的文件',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
             Expanded(
               child: _files.isEmpty
-                  ? const Center(child: Text('No files found'))
+                  ? const Center(child: Text('未找到文件'))
                   : ListView.builder(
                       itemCount: _files.length,
                       itemBuilder: (context, index) {

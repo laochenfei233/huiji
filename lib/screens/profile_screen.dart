@@ -38,7 +38,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Profile saved')),
+        const SnackBar(content: Text('个人资料已保存')),
       );
     }
   }

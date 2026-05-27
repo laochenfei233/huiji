@@ -1,17 +1,20 @@
 //
-// Generated file. Do not edit.
+//  Generated file. Do not edit.
 //
 
 import FlutterMacOS
 import Foundation
 
-// Include flutter_webrtc plugin
-#if canImport(flutter_webrtc)
-import flutter_webrtc
-#endif
+import audioplayers_darwin
+import record_macos
+import share_plus
+import shared_preferences_foundation
+import sqflite_darwin
 
 func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
-  #if canImport(flutter_webrtc)
-  FlutterWebRTCPlugin.register(with: registry.registrar(forPlugin: "FlutterWebRTCPlugin"))
-  #endif
+  AudioplayersDarwinPlugin.register(with: registry.registrar(forPlugin: "AudioplayersDarwinPlugin"))
+  RecordMacOsPlugin.register(with: registry.registrar(forPlugin: "RecordMacOsPlugin"))
+  SharePlusMacosPlugin.register(with: registry.registrar(forPlugin: "SharePlusMacosPlugin"))
+  SharedPreferencesPlugin.register(with: registry.registrar(forPlugin: "SharedPreferencesPlugin"))
+  SqflitePlugin.register(with: registry.registrar(forPlugin: "SqflitePlugin"))
 }

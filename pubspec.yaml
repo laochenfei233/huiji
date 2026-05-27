@@ -1,7 +1,7 @@
-name: meeting_note
-description: A multi-model real-time meeting recording system
+name: yanji
+description: 言记 - 智能会议纪要系统
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -9,9 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_webrtc: ^1.2.0
   sqflite: ^2.2.6
-  sqflite_common_ffi: ^2.3.6
   path: ^1.8.3
   path_provider: ^2.0.15
   dio: ^5.0.3
@@ -23,6 +21,17 @@ dependencies:
   uuid: ^4.0.0
   audioplayers: ^6.5.1
   permission_handler: ^12.0.1
+  flutter_markdown: ^0.7.4+3
+  
+  # HTTP 客户端
+  http: ^1.2.0
+
+  # 加密（S3 签名）
+  crypto: ^3.0.3
+
+  # Web 平台 API（AudioContext 等）
+  web: ^1.1.0
+  record: ^6.2.0
 
 dev_dependencies:
   flutter_test:
@@ -34,13 +43,3 @@ flutter:
   assets:
     - assets/
     - assets/database/
-
-  plugin:
-    platforms:
-      android:
-        package: com.example.meeting_note
-        pluginClass: AudioCapturerPlugin
-      ios:
-        pluginClass: AudioCapturerPlugin
-      linux:
-        pluginClass: AudioCapturerPlugin
