@@ -5,12 +5,15 @@
 ## 功能特性
 
 ### 语音识别
-- 基于 DashScope 百炼实时语音识别（FunASR / Qwen3 ASR）
+- **云端 ASR**：DashScope 百炼实时语音识别（FunASR / Qwen3 ASR）
+- **本地 ASR**：sherpa-onnx 离线识别（SenseVoice-Small，无需联网）
 - WebSocket 实时流式转写，边录边出文字
-- 原生平台直连 DashScope，无需代理服务器
+- 支持多 ASR 后端切换
 
 ### 会议纪要
-- AI 自动生成结构化会议纪要（基于 Qwen-Plus）
+- AI 自动生成结构化会议纪要
+- **云端 LLM**：通义千问、DeepSeek、OpenAI 等兼容 API
+- **本地 LLM**：基于 llama.cpp 的离线摘要生成（无需联网）
 - 5 种内置模板：Executive 摘要、详细纪要、行动项清单、决策日志、问答整理
 - 支持自定义模板，可设置默认模板
 - 基于会议内容的智能问答
@@ -34,7 +37,7 @@
 ### 系统检测
 - 麦克风录音测试
 - 网络连接测试
-- ASR WebSocket 连接测试
+- ASR 连接测试
 - LLM API 连接测试
 - S3 / WebDAV 连接测试
 
@@ -45,7 +48,36 @@
 | Android | 已支持 |
 | Web | 已支持 |
 | Windows | 已支持 |
-| macOS | 待适配 |
+| iOS | 待适配 |
+
+## 本地模型
+
+### 本地 ASR 模型
+
+| 模型 | 大小 | 语言 | 说明 |
+|------|------|------|------|
+| SenseVoice-Small (float32) | 241MB | 中英日粤 | 阿里多语言语音识别 |
+
+### 本地 LLM 模型
+
+#### 6GB RAM 设备 (骁龙865 / iPhone 11+)
+
+| 模型 | 参数量 | 大小 | 特点 |
+|------|--------|------|------|
+| Qwen3-0.6B | 0.6B | ~400MB | 中文轻量首选 |
+| DeepSeek-R1 1.5B | 1.5B | ~800MB | 推理/数学能力强 |
+| Gemma 3 1B | 1B | ~700MB | 多语言均衡 |
+
+#### 8GB+ RAM 设备 (骁龙8 Gen2+ / iPhone 14+)
+
+| 模型 | 参数量 | 大小 | 特点 |
+|------|--------|------|------|
+| Qwen3-1.7B | 1.7B | ~1GB | 中文质量最优 |
+| Qwen3-4B | 4B | ~3.9GB | 最强中文摘要 |
+| ChatGLM3-6B | 6B | ~3.8GB | 中文对话能力强 |
+| Phi-4-mini | 3.8B | ~2.1GB | 英文/推理能力强 |
+
+> 所有模型均为 GGUF Q4_K_M 量化格式，通过 fllama (llama.cpp) 在设备端推理。
 
 ## 快速开始
 
@@ -94,10 +126,12 @@ flutter build web
 ### ASR 语音识别
 - 选择识别模型（默认：百炼 FunASR Realtime）
 - 填写 DashScope API Key
+- 或选择本地模型（SenseVoice-Small，离线可用）
 
-### 摘要模型
-- 选择摘要模型（默认：阿里云 Qwen-Plus）
-- 填写 DashScope API Key
+### LLM 模型
+- 选择 LLM 模型（默认：阿里云 Qwen-Plus）
+- 填写 API Key
+- 或选择本地模型（Qwen3 / DeepSeek / Gemma 等，离线可用）
 
 ### 云存储（可选）
 - S3 / OSS：填写 Endpoint、Bucket、Access Key、Secret Key
@@ -111,9 +145,10 @@ flutter build web
 | Dart 3.12.0 | 开发语言 |
 | SQLite (sqflite) | 本地数据库 |
 | Provider | 状态管理 |
-| Dio | HTTP 客户端 |
 | WebSocket | 实时语音流 |
-| DashScope API | 语音识别 + 大模型 |
+| DashScope API | 云端 ASR + LLM |
+| sherpa-onnx | 本地 ASR 推理 |
+| fllama (llama.cpp) | 本地 LLM 推理 |
 | HyperOS 主题 | 小米设计风格 |
 
 ## 项目结构
@@ -121,13 +156,12 @@ flutter build web
 ```
 lib/
 ├── main.dart                    # 应用入口
-├── database_init.dart           # 数据库初始化
 ├── models/                      # 数据模型
 │   ├── meeting.dart             # 会议模型
 │   ├── meeting_session.dart     # 会议会话模型
+│   ├── ai_model.dart            # ASR/LLM 模型定义
 │   └── template.dart            # 模板模型
 ├── providers/                   # 状态管理
-│   ├── meeting_provider.dart
 │   └── meeting_session_provider.dart
 ├── screens/                     # 页面
 │   ├── home_screen.dart         # 首页（侧边栏布局）
@@ -138,23 +172,29 @@ lib/
 │   ├── meeting_summary_screen.dart
 │   ├── statistics_screen.dart   # 数据统计
 │   ├── settings_screen.dart     # 设置
+│   ├── model_management_screen.dart       # 本地 ASR 模型管理
+│   ├── llm_model_management_screen.dart   # 本地 LLM 模型管理
 │   ├── template_management_screen.dart
-│   ├── audio_test_screen.dart   # 系统检测
-│   └── log_viewer_screen.dart
+│   └── import_screen.dart       # 数据导入
 ├── services/                    # 业务服务
-│   ├── storage_service.dart         # SQLite 存储
-│   ├── asr_service.dart             # 语音识别 (WebSocket)
-│   ├── llm_service.dart             # 大模型 API
+│   ├── asr_service.dart             # 语音识别（云端 + 本地）
+│   ├── llm_service.dart             # LLM 服务（云端 API）
+│   ├── local_llm_service.dart       # 本地 LLM 推理（fllama）
+│   ├── model_download_service.dart  # ASR 模型下载
+│   ├── llm_model_download_service.dart  # LLM 模型下载
 │   ├── audio_recorder_service.dart  # 音频录制
+│   ├── storage_service.dart         # SQLite 存储
 │   ├── cloud_storage_service.dart   # S3 / WebDAV
 │   ├── config_service.dart          # 配置持久化
+│   ├── recording_notification_service.dart  # 录音通知
 │   └── template_service.dart        # 模板管理
 ├── utils/                       # 工具类
 │   ├── theme_utils.dart         # HyperOS 主题
 │   ├── config_loader.dart       # 配置加载
 │   └── export_helper.dart       # 导出功能
 └── widgets/                     # 通用组件
-    └── sidebar.dart             # 侧边栏
+    ├── sidebar.dart             # 侧边栏
+    └── model_edit_dialog.dart   # 模型编辑对话框
 ```
 
 ## 主题设计
@@ -164,15 +204,6 @@ lib/
 - 背景：`#F7F7F7`（浅色）/ `#1A1A1A`（深色）
 - 圆角卡片（16px）、无阴影、简洁配色
 - 流畅的侧边栏滑动手势和动画
-
-## ASR 协议
-
-基于 DashScope 百炼 WebSocket 协议：
-1. 建立 WebSocket 连接到 `wss://dashscope.aliyuncs.com/api-ws/v1/inference`
-2. 发送 `run-task` 启动识别任务
-3. 持续发送 PCM 音频数据（16kHz 16bit 单声道）
-4. 接收 `result-generated` 实时识别结果
-5. 发送 `finish-task` 结束任务
 
 ## 贡献指南
 

@@ -2,7 +2,7 @@
 # See https://dart.dev/tools/pub/glossary#lockfile
 packages:
   archive:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: archive
       sha256: a96e8b390886ee8abb49b7bd3ac8df6f451c621619f52a26e815fdcf568959ff
@@ -153,6 +153,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "3.0.7"
+  dbus:
+    dependency: transitive
+    description:
+      name: dbus
+      sha256: "0ce9b0a839e6dee59a37a623d2fc26a35bbbe6404213e419b0d6411023d62645"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.7.14"
   dio:
     dependency: "direct main"
     description:
@@ -201,6 +209,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "1.1.1"
+  fllama:
+    dependency: "direct main"
+    description:
+      name: fllama
+      sha256: a58f9163013f7d0956a0685ddc1ea97cc3f2790939320eed969533fc9031de3b
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.0.1"
   flutter:
     dependency: "direct main"
     description: flutter
@@ -214,6 +230,30 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "5.0.0"
+  flutter_local_notifications:
+    dependency: "direct main"
+    description:
+      name: flutter_local_notifications
+      sha256: ef41ae901e7529e52934feba19ed82827b11baa67336829564aeab3129460610
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "18.0.1"
+  flutter_local_notifications_linux:
+    dependency: transitive
+    description:
+      name: flutter_local_notifications_linux
+      sha256: "8f685642876742c941b29c32030f6f4f6dacd0e4eaecb3efbb187d6a3812ca01"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "5.0.0"
+  flutter_local_notifications_platform_interface:
+    dependency: transitive
+    description:
+      name: flutter_local_notifications_platform_interface
+      sha256: "6c5b83c86bf819cdb177a9247a3722067dd8cc6313827ce7c77a4b238a26fd52"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "8.0.0"
   flutter_markdown:
     dependency: "direct main"
     description:
@@ -222,6 +262,54 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "0.7.7+1"
+  flutter_secure_storage:
+    dependency: "direct main"
+    description:
+      name: flutter_secure_storage
+      sha256: "9cad52d75ebc511adfae3d447d5d13da15a55a92c9410e50f67335b6d21d16ea"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "9.2.4"
+  flutter_secure_storage_linux:
+    dependency: transitive
+    description:
+      name: flutter_secure_storage_linux
+      sha256: be76c1d24a97d0b98f8b54bce6b481a380a6590df992d0098f868ad54dc8f688
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.2.3"
+  flutter_secure_storage_macos:
+    dependency: transitive
+    description:
+      name: flutter_secure_storage_macos
+      sha256: "6c0a2795a2d1de26ae202a0d78527d163f4acbb11cde4c75c670f3a0fc064247"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "3.1.3"
+  flutter_secure_storage_platform_interface:
+    dependency: transitive
+    description:
+      name: flutter_secure_storage_platform_interface
+      sha256: cf91ad32ce5adef6fba4d736a542baca9daf3beac4db2d04be350b87f69ac4a8
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.1.2"
+  flutter_secure_storage_web:
+    dependency: transitive
+    description:
+      name: flutter_secure_storage_web
+      sha256: f4ebff989b4f07b2656fb16b47852c0aab9fed9b4ec1c70103368337bc1886a9
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.2.1"
+  flutter_secure_storage_windows:
+    dependency: transitive
+    description:
+      name: flutter_secure_storage_windows
+      sha256: b20b07cb5ed4ed74fc567b78a72936203f587eba460af1df11281c9326cd3709
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "3.1.2"
   flutter_test:
     dependency: "direct dev"
     description: flutter
@@ -288,6 +376,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "1.0.1"
+  js:
+    dependency: transitive
+    description:
+      name: js
+      sha256: f2c445dce49627136094980615a031419f7f3eb393237e4ecd97ac15dea343f3
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.6.7"
   leak_tracker:
     dependency: transitive
     description:
@@ -400,6 +496,22 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.2.0"
+  package_info_plus:
+    dependency: transitive
+    description:
+      name: package_info_plus
+      sha256: "468c26b4254ab01979fa5e4a98cb343ea3631b9acee6f21028997419a80e1a20"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "9.0.1"
+  package_info_plus_platform_interface:
+    dependency: transitive
+    description:
+      name: package_info_plus_platform_interface
+      sha256: "202a487f08836a592a6bd4f901ac69b3a8f146af552bbd14407b6b41e1c3f086"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "3.2.1"
   path:
     dependency: "direct main"
     description:
@@ -720,6 +832,78 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.4.1"
+  sherpa_onnx:
+    dependency: "direct main"
+    description:
+      name: sherpa_onnx
+      sha256: b5a503cedc0605134770015fd4dba00c62f109f8a16630a52ebc04ef99ccbf93
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_android_arm64:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_android_arm64
+      sha256: b6aeb7cd5b32c6d1bd209a4bff0f28044d95977620d20e1d926b0c31e0a0725f
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_android_armeabi:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_android_armeabi
+      sha256: ab647a0a4ca4b7c31159db1bdfc79b718882a088a2ed9757b340856d626715c0
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_android_x86:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_android_x86
+      sha256: df0e8bf68ff564bf8683f285ee3e65fb296ec118dbf6ce60a906bb1b3206120e
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_android_x86_64:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_android_x86_64
+      sha256: f9f63fafde9498bed9de45a0e1d3f2eb4d649ad257e5de30b91d139432750b84
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_ios:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_ios
+      sha256: "46b30fe5db3e0741026e94f09f3515dc60071eb970e12039265e1ba98c4d812d"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_linux:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_linux
+      sha256: e0b2780d809a5be6cc36b7915bbe25dd15059e357a7f0ac684feb4e6ad4e20b7
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_macos:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_macos
+      sha256: "8049aae4e290d01ce51267541a770eb5a61c8164d46c1127406557995b054875"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.13.2"
+  sherpa_onnx_windows:
+    dependency: transitive
+    description:
+      name: sherpa_onnx_windows
+      sha256: "428c5fc2fea2d9083555d6281224ab7dba3a33a8fbc013de18ea843cf1236f14"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.13.2"
   sky_engine:
     dependency: transitive
     description: flutter
@@ -821,6 +1005,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "0.7.11"
+  timezone:
+    dependency: transitive
+    description:
+      name: timezone
+      sha256: dd14a3b83cfd7cb19e7888f1cbc20f258b8d71b54c06f79ac585f14093a287d1
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.10.1"
   typed_data:
     dependency: transitive
     description:
@@ -885,6 +1077,22 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "15.2.0"
+  wakelock_plus:
+    dependency: "direct main"
+    description:
+      name: wakelock_plus
+      sha256: ddf3db70eaa10c37558ff817519b85d527dbd21034fd5d8e1c2e85f31588f1c1
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.5.2"
+  wakelock_plus_platform_interface:
+    dependency: transitive
+    description:
+      name: wakelock_plus_platform_interface
+      sha256: b13f99e992e7ae6a152e16c5559d3c07ff445b13330192662494e614ca3e7d7b
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.5.1"
   web:
     dependency: "direct main"
     description:

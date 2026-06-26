@@ -5,6 +5,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yanji/services/config_service.dart';
 import 'package:yanji/services/storage_service.dart';
 import 'package:yanji/screens/template_management_screen.dart';
+import 'package:yanji/screens/model_management_screen.dart';
+import 'package:yanji/screens/llm_model_management_screen.dart';
+import 'package:yanji/widgets/model_edit_dialog.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -17,6 +20,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late Future<AppConfig> _configFuture;
   bool _darkMode = false;
   bool _notificationsEnabled = true;
+  bool _recordingNotification = true;
+  bool _lockScreenRecording = true;
 
   @override
   void initState() {
@@ -30,6 +35,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _darkMode = prefs.getBool('dark_mode') ?? false;
       _notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
+      _recordingNotification = prefs.getBool('recording_notification') ?? true;
+      _lockScreenRecording = prefs.getBool('lock_screen_recording') ?? true;
     });
   }
 
@@ -37,585 +44,73 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('dark_mode', _darkMode);
     await prefs.setBool('notifications_enabled', _notificationsEnabled);
+    await prefs.setBool('recording_notification', _recordingNotification);
+    await prefs.setBool('lock_screen_recording', _lockScreenRecording);
   }
 
-  // Function to show dialog for editing ASR model
-  void _editASRModel(BuildContext context, ASRModelConfig model, int index) async {
-    final nameController = TextEditingController(text: model.name);
-    final urlController = TextEditingController(text: model.url);
-    final keyController = TextEditingController(text: model.key);
-    final modelNameController = TextEditingController(text: model.modelName ?? '');
-    final protocolController = TextEditingController(text: model.protocol ?? '');
-    String modelType = model.type;
-    int httpAsrInterval = model.httpAsrIntervalSec;
+  void _refreshConfig() {
+    setState(() => _configFuture = ConfigLoader.loadConfig());
+  }
 
-    showDialog(
+  void _editASRModel(BuildContext context, ASRModelConfig model, int index) {
+    showASRModelDialog(
       context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: Text('编辑 ASR 模型 - ${model.name}'),
-              content: SizedBox(
-                height: MediaQuery.of(context).size.height * 0.55,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TextField(
-                        controller: nameController,
-                        decoration: const InputDecoration(labelText: '名称'),
-                      ),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<String>(
-                        value: modelType,
-                        decoration: const InputDecoration(labelText: '类型'),
-                        items: const [
-                          DropdownMenuItem(value: 'websocket', child: Text('WebSocket（百炼实时流式）')),
-                          DropdownMenuItem(value: 'local_funasr', child: Text('本地 FunASR（paraformer-zh-streaming）')),
-                          DropdownMenuItem(value: 'http', child: Text('HTTP API')),
-                        ],
-                        onChanged: (value) {
-                          setDialogState(() {
-                            modelType = value!;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      if (modelType == 'websocket') ...[
-                        TextField(
-                          controller: urlController,
-                          decoration: const InputDecoration(
-                            labelText: 'WebSocket 服务地址',
-                            hintText: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: keyController,
-                          decoration: const InputDecoration(
-                            labelText: 'API Key',
-                            hintText: 'sk-...',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: modelNameController,
-                          decoration: const InputDecoration(
-                            labelText: '模型名称',
-                            hintText: 'fun-asr-realtime',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: protocolController,
-                          decoration: const InputDecoration(
-                            labelText: '协议路径（可选）',
-                            hintText: '/ws',
-                          ),
-                        ),
-                      ] else if (modelType == 'local_funasr') ...[
-                        TextField(
-                          controller: urlController,
-                          decoration: const InputDecoration(
-                            labelText: 'WebSocket 服务地址',
-                            hintText: 'ws://localhost:10095',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: modelNameController,
-                          decoration: const InputDecoration(
-                            labelText: '模型名称',
-                            hintText: 'paraformer-zh-streaming',
-                          ),
-                        ),
-                      ] else ...[
-                        TextField(
-                          controller: urlController,
-                          decoration: const InputDecoration(
-                            labelText: 'API 地址',
-                            hintText: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: keyController,
-                          decoration: const InputDecoration(
-                            labelText: 'API Key',
-                            hintText: 'sk-...',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: modelNameController,
-                          decoration: const InputDecoration(
-                            labelText: '模型名称',
-                            hintText: 'qwen-audio-turbo',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        DropdownButtonFormField<int>(
-                          value: httpAsrInterval,
-                          decoration: const InputDecoration(labelText: '音频发送间隔'),
-                          items: const [
-                            DropdownMenuItem(value: 3, child: Text('3 秒')),
-                            DropdownMenuItem(value: 5, child: Text('5 秒')),
-                            DropdownMenuItem(value: 10, child: Text('10 秒')),
-                            DropdownMenuItem(value: 30, child: Text('30 秒')),
-                            DropdownMenuItem(value: 60, child: Text('1 分钟')),
-                          ],
-                          onChanged: (value) {
-                            if (value != null) {
-                              setDialogState(() {
-                                httpAsrInterval = value;
-                              });
-                            }
-                          },
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('取消'),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    Navigator.of(context).pop();
-                    final config = await _configFuture;
-                    final updatedModels = List<ASRModelConfig>.from(config.asrModels);
-                    updatedModels[index] = ASRModelConfig(
-                      name: nameController.text,
-                      type: modelType,
-                      url: urlController.text,
-                      key: keyController.text,
-                      modelName: modelNameController.text.isNotEmpty ? modelNameController.text : null,
-                      protocol: modelType == 'websocket'
-                          ? (protocolController.text.isNotEmpty ? protocolController.text : null)
-                          : null,
-                      httpAsrIntervalSec: httpAsrInterval,
-                    );
-
-                    await ConfigService.saveASRModels(updatedModels);
-                    setState(() {
-                      _configFuture = ConfigLoader.loadConfig();
-                    });
-
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('ASR模型配置已更新')),
-                      );
-                    }
-                  },
-                  child: const Text('保存'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      existingModel: model,
+      index: index,
+      configFuture: _configFuture,
+      onSaved: _refreshConfig,
     );
   }
 
-  // Function to show dialog for adding new ASR model
-  void _addASRModel(BuildContext context) async {
-    final nameController = TextEditingController();
-    final urlController = TextEditingController();
-    final keyController = TextEditingController();
-    final modelNameController = TextEditingController();
-    final protocolController = TextEditingController();
-    String modelType = 'websocket';
-    int httpAsrInterval = 3;
-
-    showDialog(
+  void _addASRModel(BuildContext context) {
+    showASRModelDialog(
       context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text('添加 ASR 模型'),
-              content: SizedBox(
-                height: MediaQuery.of(context).size.height * 0.55,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TextField(
-                        controller: nameController,
-                        decoration: const InputDecoration(labelText: '名称'),
-                      ),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<String>(
-                        value: modelType,
-                        decoration: const InputDecoration(labelText: '类型'),
-                        items: const [
-                          DropdownMenuItem(value: 'websocket', child: Text('WebSocket（百炼实时流式）')),
-                          DropdownMenuItem(value: 'local_funasr', child: Text('本地 FunASR（paraformer-zh-streaming）')),
-                          DropdownMenuItem(value: 'http', child: Text('HTTP API')),
-                        ],
-                        onChanged: (value) {
-                          setDialogState(() {
-                            modelType = value!;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      if (modelType == 'websocket') ...[
-                        TextField(
-                          controller: urlController,
-                          decoration: const InputDecoration(
-                            labelText: 'WebSocket 服务地址',
-                            hintText: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: keyController,
-                          decoration: const InputDecoration(
-                            labelText: 'API Key',
-                            hintText: 'sk-...',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: modelNameController,
-                          decoration: const InputDecoration(
-                            labelText: '模型名称',
-                            hintText: 'fun-asr-realtime',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: protocolController,
-                          decoration: const InputDecoration(
-                            labelText: '协议路径（可选）',
-                            hintText: '/ws',
-                          ),
-                        ),
-                      ] else if (modelType == 'local_funasr') ...[
-                        TextField(
-                          controller: urlController,
-                          decoration: const InputDecoration(
-                            labelText: 'WebSocket 服务地址',
-                            hintText: 'ws://localhost:10095',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: modelNameController,
-                          decoration: const InputDecoration(
-                            labelText: '模型名称',
-                            hintText: 'paraformer-zh-streaming',
-                          ),
-                        ),
-                      ] else ...[
-                        TextField(
-                          controller: urlController,
-                          decoration: const InputDecoration(
-                            labelText: 'API 地址',
-                            hintText: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: keyController,
-                          decoration: const InputDecoration(
-                            labelText: 'API Key',
-                            hintText: 'sk-...',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: modelNameController,
-                          decoration: const InputDecoration(
-                            labelText: '模型名称',
-                            hintText: 'qwen-audio-turbo',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        DropdownButtonFormField<int>(
-                          value: httpAsrInterval,
-                          decoration: const InputDecoration(labelText: '音频发送间隔'),
-                          items: const [
-                            DropdownMenuItem(value: 3, child: Text('3 秒')),
-                            DropdownMenuItem(value: 5, child: Text('5 秒')),
-                            DropdownMenuItem(value: 10, child: Text('10 秒')),
-                            DropdownMenuItem(value: 30, child: Text('30 秒')),
-                            DropdownMenuItem(value: 60, child: Text('1 分钟')),
-                          ],
-                          onChanged: (value) {
-                            if (value != null) {
-                              setDialogState(() {
-                                httpAsrInterval = value;
-                              });
-                            }
-                          },
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('取消'),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    Navigator.of(context).pop();
-                    final config = await _configFuture;
-                    final updatedModels = List<ASRModelConfig>.from(config.asrModels);
-                    updatedModels.add(ASRModelConfig(
-                      name: nameController.text,
-                      type: modelType,
-                      url: urlController.text,
-                      key: keyController.text,
-                      modelName: modelNameController.text.isNotEmpty ? modelNameController.text : null,
-                      protocol: modelType == 'websocket'
-                          ? (protocolController.text.isNotEmpty ? protocolController.text : null)
-                          : null,
-                      httpAsrIntervalSec: httpAsrInterval,
-                    ));
-
-                    await ConfigService.saveASRModels(updatedModels);
-                    setState(() {
-                      _configFuture = ConfigLoader.loadConfig();
-                    });
-
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('新的ASR模型已添加')),
-                      );
-                    }
-                  },
-                  child: const Text('保存'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      existingModel: null,
+      index: null,
+      configFuture: _configFuture,
+      onSaved: _refreshConfig,
     );
   }
 
-  // 预设摘要模型列表
-  static const List<Map<String, String>> _presetModels = [
-    {'name': '阿里云 Qwen', 'url': 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'modelName': 'qwen3.5-plus'},
-    {'name': 'DeepSeek', 'url': 'https://api.deepseek.com/v1', 'modelName': 'deepseek-chat'},
-    {'name': '小米 MiMo', 'url': 'https://api.xiaomi.com/v1', 'modelName': 'mimo'},
-    {'name': 'Kimi (Moonshot)', 'url': 'https://api.moonshot.cn/v1', 'modelName': 'moonshot-v1-128k'},
-    {'name': 'ChatGPT (OpenAI)', 'url': 'https://api.openai.com/v1', 'modelName': 'gpt-4o'},
-    {'name': 'Claude (Anthropic)', 'url': 'https://api.anthropic.com/v1', 'modelName': 'claude-sonnet-4-20250514'},
-  ];
-
-  // Function to show dialog for editing Summary model
-  void _editSummaryModel(BuildContext context, SummaryModelConfig model, int index) async {
-    final nameController = TextEditingController(text: model.name);
-    final urlController = TextEditingController(text: model.url);
-    final keyController = TextEditingController(text: model.key);
-    final modelNameController = TextEditingController(text: model.modelName);
-
-    showDialog(
+  // 长按删除确认
+  Future<bool> _confirmDelete(String name) async {
+    final result = await showDialog<bool>(
       context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: Text('编辑摘要模型 - ${model.name}'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: nameController,
-                      decoration: const InputDecoration(labelText: '显示名称（备注用）'),
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      decoration: const InputDecoration(labelText: '快速选择预设'),
-                      items: _presetModels.map((p) {
-                        return DropdownMenuItem(value: p['url'], child: Text(p['name']!));
-                      }).toList(),
-                      onChanged: (url) {
-                        if (url != null) {
-                          final preset = _presetModels.firstWhere((p) => p['url'] == url);
-                          setDialogState(() {
-                            urlController.text = preset['url']!;
-                            modelNameController.text = preset['modelName']!;
-                            if (nameController.text.isEmpty) {
-                              nameController.text = preset['name']!;
-                            }
-                          });
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: modelNameController,
-                      decoration: const InputDecoration(
-                        labelText: '模型名称',
-                        hintText: '例如: qwen-plus, deepseek-chat',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: urlController,
-                      decoration: const InputDecoration(labelText: 'API 地址'),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: keyController,
-                      decoration: const InputDecoration(
-                        labelText: 'API Key',
-                        hintText: 'sk-...',
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('取消'),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    Navigator.of(context).pop();
-                    final config = await _configFuture;
-                    final updatedModels = List<SummaryModelConfig>.from(config.summaryModels);
-                    updatedModels[index] = SummaryModelConfig(
-                      name: nameController.text,
-                      url: urlController.text,
-                      key: keyController.text,
-                      modelName: modelNameController.text.isNotEmpty ? modelNameController.text : 'qwen3.5-plus',
-                    );
-                    await ConfigService.saveSummaryModels(updatedModels);
-                    setState(() {
-                      _configFuture = ConfigLoader.loadConfig();
-                    });
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('摘要模型配置已更新')),
-                      );
-                    }
-                  },
-                  child: const Text('保存'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      builder: (ctx) => AlertDialog(
+        title: const Text('确认删除'),
+        content: Text('确定要删除「$name」吗？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('删除', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  void _editSummaryModel(BuildContext context, SummaryModelConfig model, int index) {
+    showSummaryModelDialog(
+      context: context,
+      existingModel: model,
+      index: index,
+      configFuture: _configFuture,
+      onSaved: _refreshConfig,
     );
   }
 
-  // Function to show dialog for adding new Summary model
-  void _addSummaryModel(BuildContext context) async {
-    final nameController = TextEditingController();
-    final urlController = TextEditingController();
-    final keyController = TextEditingController();
-    final modelNameController = TextEditingController();
-
-    showDialog(
+  void _addSummaryModel(BuildContext context) {
+    showSummaryModelDialog(
       context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text('添加摘要模型'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: nameController,
-                      decoration: const InputDecoration(labelText: '显示名称（备注用）'),
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      decoration: const InputDecoration(labelText: '快速选择预设'),
-                      items: _presetModels.map((p) {
-                        return DropdownMenuItem(value: p['url'], child: Text(p['name']!));
-                      }).toList(),
-                      onChanged: (url) {
-                        if (url != null) {
-                          final preset = _presetModels.firstWhere((p) => p['url'] == url);
-                          setDialogState(() {
-                            urlController.text = preset['url']!;
-                            modelNameController.text = preset['modelName']!;
-                            if (nameController.text.isEmpty) {
-                              nameController.text = preset['name']!;
-                            }
-                          });
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: modelNameController,
-                      decoration: const InputDecoration(
-                        labelText: '模型名称',
-                        hintText: '例如: qwen-plus, deepseek-chat',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: urlController,
-                      decoration: const InputDecoration(labelText: 'API 地址'),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: keyController,
-                      decoration: const InputDecoration(
-                        labelText: 'API Key',
-                        hintText: 'sk-...',
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('取消'),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    Navigator.of(context).pop();
-                    final config = await _configFuture;
-                    final updatedModels = List<SummaryModelConfig>.from(config.summaryModels);
-                    updatedModels.add(SummaryModelConfig(
-                      name: nameController.text,
-                      url: urlController.text,
-                      key: keyController.text,
-                      modelName: modelNameController.text.isNotEmpty ? modelNameController.text : 'qwen3.5-plus',
-                    ));
-                    await ConfigService.saveSummaryModels(updatedModels);
-                    setState(() {
-                      _configFuture = ConfigLoader.loadConfig();
-                    });
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('新的摘要模型已添加')),
-                      );
-                    }
-                  },
-                  child: const Text('保存'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      existingModel: null,
+      index: null,
+      configFuture: _configFuture,
+      onSaved: _refreshConfig,
     );
   }
 
-  // Function to show dialog for editing S3 configuration
   void _editS3Config(BuildContext context, S3Config config) async {
     final endpointController = TextEditingController(text: config.endpoint);
     final bucketController = TextEditingController(text: config.bucket);
@@ -824,6 +319,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _saveSettings();
                     },
                   ),
+                  SwitchListTile(
+                    title: const Text('录音通知'),
+                    subtitle: const Text('录音时在通知栏显示状态'),
+                    value: _recordingNotification,
+                    onChanged: (value) {
+                      setState(() {
+                        _recordingNotification = value;
+                      });
+                      _saveSettings();
+                    },
+                  ),
+                  SwitchListTile(
+                    title: const Text('锁屏录音'),
+                    subtitle: const Text('锁屏后继续录音，保持屏幕唤醒'),
+                    value: _lockScreenRecording,
+                    onChanged: (value) {
+                      setState(() {
+                        _lockScreenRecording = value;
+                      });
+                      _saveSettings();
+                    },
+                  ),
                   const SizedBox(height: 20),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -852,16 +369,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onTap: () {
                             _editASRModel(context, config.asrModels[i], i);
                           },
+                          onLongPress: () async {
+                            if (await _confirmDelete(config.asrModels[i].name)) {
+                              final updated = List<ASRModelConfig>.from(config.asrModels)..removeAt(i);
+                              await ConfigService.saveASRModels(updated);
+                              setState(() => _configFuture = ConfigLoader.loadConfig());
+                            }
+                          },
                         ),
                       )
                   else
                     const Text('未配置 ASR 模型'),
+                  const SizedBox(height: 10),
+                  Card(
+                    margin: const EdgeInsets.symmetric(vertical: 5),
+                    child: ListTile(
+                      leading: const Icon(Icons.download),
+                      title: const Text('模型管理'),
+                      subtitle: const Text('下载和管理本地 ASR 模型'),
+                      trailing: const Icon(Icons.arrow_forward_ios),
+                      onTap: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const ModelManagementScreen(),
+                          ),
+                        );
+                        setState(() {
+                          _configFuture = ConfigLoader.loadConfig();
+                        });
+                      },
+                    ),
+                  ),
                   const SizedBox(height: 20),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
-                        '摘要模型',
+                        'LLM 模型',
                         style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                       TextButton(
@@ -884,10 +429,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onTap: () {
                             _editSummaryModel(context, config.summaryModels[i], i);
                           },
+                          onLongPress: () async {
+                            if (await _confirmDelete(config.summaryModels[i].name)) {
+                              final updated = List<SummaryModelConfig>.from(config.summaryModels)..removeAt(i);
+                              await ConfigService.saveSummaryModels(updated);
+                              setState(() => _configFuture = ConfigLoader.loadConfig());
+                            }
+                          },
                         ),
                       )
                   else
-                    const Text('未配置摘要模型'),
+                    const Text('未配置 LLM 模型'),
+                  const SizedBox(height: 10),
+                  Card(
+                    margin: const EdgeInsets.symmetric(vertical: 5),
+                    child: ListTile(
+                      leading: const Icon(Icons.download),
+                      title: const Text('本地 LLM 模型管理'),
+                      subtitle: const Text('下载和管理本地 LLM 模型（离线摘要）'),
+                      trailing: const Icon(Icons.arrow_forward_ios),
+                      onTap: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const LlmModelManagementScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                   const SizedBox(height: 20),
                   const Text(
                     '存储配置',
@@ -907,6 +477,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onTap: () {
                         _editS3Config(context, config.storage.s3);
                       },
+                      onLongPress: () async {
+                        if (await _confirmDelete('S3 / OSS 配置')) {
+                          await ConfigService.saveS3Config(S3Config());
+                          setState(() => _configFuture = ConfigLoader.loadConfig());
+                        }
+                      },
                     ),
                   ),
                   Card(
@@ -921,6 +497,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       trailing: const Icon(Icons.edit),
                       onTap: () {
                         _editWebDAVConfig(context, config.storage.webdav);
+                      },
+                      onLongPress: () async {
+                        if (await _confirmDelete('WebDAV 配置')) {
+                          await ConfigService.saveWebDAVConfig(WebDAVConfig());
+                          setState(() => _configFuture = ConfigLoader.loadConfig());
+                        }
                       },
                     ),
                   ),

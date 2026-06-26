@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:yanji/models/meeting.dart';
 import 'package:yanji/models/template.dart';
+import 'package:yanji/screens/meeting_playback_screen.dart';
 import 'package:yanji/screens/template_management_screen.dart';
 import 'package:yanji/services/llm_service.dart';
 import 'package:yanji/services/storage_service.dart';
@@ -30,6 +31,12 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
   List<Template> _templates = [];
   String? _selectedTemplateId;
   bool _isTranscriptExpanded = false;
+  bool _hasRecording = false;
+
+  // 标题和简介编辑
+  final _titleController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  bool _isGeneratingMeta = false;
 
   @override
   void initState() {
@@ -37,6 +44,14 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
     _configFuture = ConfigLoader.loadConfig();
     _loadMeeting();
     _loadTemplates();
+    _loadRecording();
+  }
+
+  Future<void> _loadRecording() async {
+    final path = await _storageService.getRecordingPath(widget.meetingId);
+    if (path != null && mounted) {
+      setState(() => _hasRecording = true);
+    }
   }
 
   Future<void> _loadMeeting() async {
@@ -59,6 +74,8 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
           recordingDuration: detail.meeting.recordingDuration,
           folderName: detail.meeting.folderName,
         );
+        _titleController.text = detail.meeting.title;
+        _descriptionController.text = detail.meeting.description;
         _isLoading = false;
         if (detail.summary.isNotEmpty) {
           _summary = detail.summary;
@@ -214,8 +231,102 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
     }
   }
 
+  Future<void> _saveMeetingInfo() async {
+    if (_meeting == null) return;
+
+    final newTitle = _titleController.text.trim();
+    final newDescription = _descriptionController.text.trim();
+
+    if (newTitle.isEmpty) return;
+
+    try {
+      final updatedMeeting = Meeting(
+        id: _meeting!.id,
+        title: newTitle,
+        date: _meeting!.date,
+        transcript: _meeting!.transcript,
+        summary: _meeting!.summary,
+        participants: _meeting!.participants,
+        recordingDuration: _meeting!.recordingDuration,
+        folderName: _meeting!.folderName,
+        description: newDescription,
+      );
+
+      await _storageService.updateMeeting(updatedMeeting);
+
+      setState(() {
+        _meeting = updatedMeeting;
+      });
+    } catch (e) {
+      debugPrint('保存会议信息失败: $e');
+    }
+  }
+
+  Future<void> _generateMeta() async {
+    if (_meeting == null || (_meeting!.transcript ?? '').isEmpty) return;
+
+    setState(() => _isGeneratingMeta = true);
+
+    try {
+      final config = await ConfigLoader.loadConfig();
+      final llmConfig = config.llmModels.isNotEmpty ? config.llmModels.first : null;
+      if (llmConfig == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('未配置 LLM 模型')),
+          );
+        }
+        return;
+      }
+      final llmService = LLMServiceFactory.create(llmConfig);
+
+      final result = await llmService.chat(
+        systemPrompt: '''你是一个会议助手。请根据会议转录内容生成：
+1. 会议标题（不超过10个字，简洁概括会议主题）
+2. 会议简介（一句话，30字以内，概括会议核心内容）
+
+请严格按以下格式输出，不要添加其他内容：
+标题：xxx
+简介：xxx''',
+        userMessage: '会议转录内容：\n${_meeting!.transcript}',
+        temperature: 0.3,
+        maxTokens: 200,
+      );
+
+      final lines = result.split('\n');
+      String newTitle = _titleController.text;
+      String newDescription = _descriptionController.text;
+
+      for (final line in lines) {
+        if (line.startsWith('标题：') || line.startsWith('标题:')) {
+          newTitle = line.replaceFirst(RegExp(r'标题[：:]'), '').trim();
+          if (newTitle.length > 10) newTitle = newTitle.substring(0, 10);
+        } else if (line.startsWith('简介：') || line.startsWith('简介:')) {
+          newDescription = line.replaceFirst(RegExp(r'简介[：:]'), '').trim();
+        }
+      }
+
+      setState(() {
+        if (newTitle.isNotEmpty) _titleController.text = newTitle;
+        if (newDescription.isNotEmpty) _descriptionController.text = newDescription;
+      });
+
+      _saveMeetingInfo();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('生成失败: $e')),
+        );
+      }
+    } finally {
+      setState(() => _isGeneratingMeta = false);
+    }
+  }
+
   @override
   void dispose() {
+    _titleController.dispose();
+    _descriptionController.dispose();
     super.dispose();
   }
 
@@ -243,26 +354,90 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // 会议基本信息
+                        // 会议基本信息（可编辑）
                         Card(
                           child: Padding(
                             padding: const EdgeInsets.all(16.0),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  _meeting!.title,
-                                  style: Theme.of(context).textTheme.headlineSmall,
+                                Row(
+                                  children: [
+                                    const Icon(Icons.edit_note, size: 20),
+                                    const SizedBox(width: 8),
+                                    const Text(
+                                      '会议信息',
+                                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                    ),
+                                    const Spacer(),
+                                    TextButton.icon(
+                                      onPressed: _isGeneratingMeta ? null : _generateMeta,
+                                      icon: _isGeneratingMeta
+                                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                                          : const Icon(Icons.auto_awesome, size: 16),
+                                      label: const Text('AI 生成', style: TextStyle(fontSize: 12)),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _titleController,
+                                  decoration: const InputDecoration(
+                                    labelText: '会议标题',
+                                    hintText: '请输入会议标题',
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  onChanged: (_) => _saveMeetingInfo(),
                                 ),
                                 const SizedBox(height: 8),
-                                Text('会议时间: ${_meeting!.date.toString()}'),
+                                TextField(
+                                  controller: _descriptionController,
+                                  decoration: const InputDecoration(
+                                    labelText: '会议简介',
+                                    hintText: '请输入会议简介（可选）',
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  maxLines: 2,
+                                  onChanged: (_) => _saveMeetingInfo(),
+                                ),
                                 const SizedBox(height: 8),
-                                Text('参会人员: ${_meeting!.participants.map((p) => p.name).join(', ')}'),
+                                Text('会议时间: ${_meeting!.date.toString().substring(0, 19)}'),
+                                if (_meeting!.participants.isNotEmpty)
+                                  Text('参会人员: ${_meeting!.participants.map((p) => p.name).join(', ')}'),
                               ],
                             ),
                           ),
                         ),
                         const SizedBox(height: 16),
+
+                        // 录音回放入口
+                        if (_hasRecording) ...[
+                          Card(
+                            child: ListTile(
+                              leading: const Icon(Icons.headphones),
+                              title: const Text(
+                                '会议录音回放',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: const Text('点击播放录音并对照原文'),
+                              trailing: const Icon(Icons.arrow_forward_ios),
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => MeetingPlaybackScreen(
+                                      meetingId: widget.meetingId,
+                                      title: _meeting!.title,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
 
                         // 模板选择和纪要生成
                         Card(
@@ -404,16 +579,17 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                               ),
                               if (_isTranscriptExpanded)
                                 Container(
-                                  height: 300,
-                                  margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                                  height: 500,
+                                  margin: const EdgeInsets.fromLTRB(8, 0, 8, 16),
                                   decoration: BoxDecoration(
                                     border: Border.all(color: Colors.grey),
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: SingleChildScrollView(
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(8.0),
-                                      child: Text(_meeting!.transcript ?? ''),
+                                    padding: const EdgeInsets.all(12),
+                                    child: Text(
+                                      _meeting!.transcript ?? '',
+                                      style: const TextStyle(fontSize: 14, height: 1.6),
                                     ),
                                   ),
                                 ),

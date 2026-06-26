@@ -50,6 +50,7 @@ class ConfigLoader {
         asrModels: asrModels,
         llmModels: llmModels,
         storage: storage,
+        githubProxy: await ConfigService.loadGithubProxy(),
       );
     } catch (e) {
       return AppConfig(
@@ -65,11 +66,13 @@ class AppConfig {
   final List<ASRModelConfig> asrModels;
   final List<LLMModelConfig> llmModels;
   final StorageConfig storage;
+  final String? githubProxy; // GitHub 代理加速 URL
 
   AppConfig({
     required this.asrModels,
     required this.llmModels,
     required this.storage,
+    this.githubProxy,
   });
 
   // 向后兼容
@@ -172,12 +175,13 @@ class WebDAVConfig {
 
 class ASRModelConfig {
   final String name;
-  final String type; // 'websocket', 'http', 'local_funasr'
+  final String type; // 'websocket', 'http', 'local_funasr', 'local_funasr_onnx'
   final String url;
   final String key;
   final String? modelName;
   final String? protocol; // WebSocket 协议路径
   final int httpAsrIntervalSec; // HTTP ASR 发送音频间隔（秒）
+  final String? modelPath; // 本地 ONNX 模型路径
 
   ASRModelConfig({
     required this.name,
@@ -187,6 +191,7 @@ class ASRModelConfig {
     this.modelName,
     this.protocol,
     this.httpAsrIntervalSec = 3,
+    this.modelPath,
   });
 
   factory ASRModelConfig.fromJson(Map<String, dynamic> json) {
@@ -198,6 +203,7 @@ class ASRModelConfig {
       modelName: json['model_name'],
       protocol: json['protocol'],
       httpAsrIntervalSec: json['http_asr_interval_sec'] as int? ?? 3,
+      modelPath: json['model_path'],
     );
   }
 
@@ -210,6 +216,7 @@ class ASRModelConfig {
       'model_name': modelName,
       'protocol': protocol,
       'http_asr_interval_sec': httpAsrIntervalSec,
+      'model_path': modelPath,
     };
   }
 }
@@ -219,13 +226,17 @@ class LLMModelConfig {
   final String url;
   final String key;
   final String modelName;
+  final String? modelPath; // 本地 GGUF 模型路径
 
   LLMModelConfig({
     required this.name,
     required this.url,
     required this.key,
     this.modelName = 'qwen3.5-plus',
+    this.modelPath,
   });
+
+  bool get isLocal => modelPath != null && modelPath!.isNotEmpty;
 
   factory LLMModelConfig.fromJson(Map<String, dynamic> json) {
     return LLMModelConfig(
@@ -233,6 +244,7 @@ class LLMModelConfig {
       url: json['url'] ?? '',
       key: json['key'] ?? '',
       modelName: json['model_name'] ?? 'qwen3.5-plus',
+      modelPath: json['model_path'],
     );
   }
 
@@ -242,6 +254,7 @@ class LLMModelConfig {
       'url': url,
       'key': key,
       'model_name': modelName,
+      'model_path': modelPath,
     };
   }
 }

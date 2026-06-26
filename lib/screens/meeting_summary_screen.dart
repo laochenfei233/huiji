@@ -24,11 +24,32 @@ class _MeetingSummaryScreenState extends State<MeetingSummaryScreen> {
   List<Template> _templates = [];
   String? _selectedTemplateId;
 
+  // 模型选择
+  List<LLMModelConfig> _llmModels = [];
+  String _selectedModelName = '';
+
+  // 标题和简介
+  final _titleController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  bool _isGeneratingMeta = false;
+
   @override
   void initState() {
     super.initState();
+    _loadConfig();
     _loadTemplates();
     _initializeLLMService();
+  }
+
+  Future<void> _loadConfig() async {
+    final config = await ConfigLoader.loadConfig();
+    if (!mounted) return;
+    setState(() {
+      _llmModels = config.llmModels;
+      _selectedModelName = _session.summaryModelName.isNotEmpty
+          ? _session.summaryModelName
+          : (config.llmModels.isNotEmpty ? config.llmModels.first.name : '');
+    });
   }
 
   MeetingSession get _session =>
@@ -52,16 +73,9 @@ class _MeetingSummaryScreenState extends State<MeetingSummaryScreen> {
     }
   }
 
-  Template? get _selectedTemplate {
-    if (_selectedTemplateId == null || _templates.isEmpty) return null;
-    try {
-      return _templates.firstWhere((t) => t.id == _selectedTemplateId);
-    } catch (_) {
-      return _templates.isNotEmpty ? _templates.first : null;
-    }
-  }
-
   Future<void> _initializeLLMService() async {
+    _titleController.text = _session.title;
+    _descriptionController.text = _session.description;
     if (_session.originalTranscript.isNotEmpty && _session.summaryText == null) {
       _generateSummary();
     } else if (_session.summaryText != null) {
@@ -79,7 +93,7 @@ class _MeetingSummaryScreenState extends State<MeetingSummaryScreen> {
     try {
       final config = await ConfigLoader.loadConfig();
       final summaryConfig = config.llmModels.firstWhere(
-        (model) => model.name == _session.summaryModelName,
+        (model) => model.name == _selectedModelName,
         orElse: () => config.llmModels.first,
       );
       final llmService = LLMServiceFactory.create(summaryConfig);
@@ -121,6 +135,13 @@ class _MeetingSummaryScreenState extends State<MeetingSummaryScreen> {
 
   void _saveAndFinish() async {
     final provider = Provider.of<MeetingSessionProvider>(context, listen: false);
+    // 保存标题和简介
+    await provider.updateSession(_session.copyWith(
+      title: _titleController.text.trim().isNotEmpty
+          ? _titleController.text.trim()
+          : _session.title,
+      description: _descriptionController.text.trim(),
+    ));
     await provider.completeSession();
     if (mounted) {
       Navigator.of(context).popUntil((route) => route.isFirst);
@@ -141,6 +162,63 @@ class _MeetingSummaryScreenState extends State<MeetingSummaryScreen> {
     }
   }
 
+  Future<void> _generateMeta() async {
+    if (_session.originalTranscript.isEmpty) {
+      _showError('没有转录内容，无法生成');
+      return;
+    }
+
+    setState(() => _isGeneratingMeta = true);
+
+    try {
+      final config = await ConfigLoader.loadConfig();
+      final llmConfig = config.llmModels.firstWhere(
+        (m) => m.name == _selectedModelName,
+        orElse: () => config.llmModels.first,
+      );
+      final llmService = LLMServiceFactory.create(llmConfig);
+
+      // 生成标题和简介
+      final result = await llmService.chat(
+        systemPrompt: '''你是一个会议助手。请根据会议转录内容生成：
+1. 会议标题（不超过10个字，简洁概括会议主题）
+2. 会议简介（一句话，30字以内，概括会议核心内容）
+
+请严格按以下格式输出，不要添加其他内容：
+标题：xxx
+简介：xxx''',
+        userMessage: '会议转录内容：\n${_session.originalTranscript}',
+        temperature: 0.3,
+        maxTokens: 200,
+      );
+
+      // 解析结果
+      final lines = result.split('\n');
+      String newTitle = _titleController.text;
+      String newDescription = _descriptionController.text;
+
+      for (final line in lines) {
+        if (line.startsWith('标题：') || line.startsWith('标题:')) {
+          newTitle = line.replaceFirst(RegExp(r'标题[：:]'), '').trim();
+          if (newTitle.length > 10) newTitle = newTitle.substring(0, 10);
+        } else if (line.startsWith('简介：') || line.startsWith('简介:')) {
+          newDescription = line.replaceFirst(RegExp(r'简介[：:]'), '').trim();
+        }
+      }
+
+      setState(() {
+        if (newTitle.isNotEmpty) _titleController.text = newTitle;
+        if (newDescription.isNotEmpty) _descriptionController.text = newDescription;
+      });
+
+      _showMessage('标题和简介已生成');
+    } catch (e) {
+      _showError('生成失败: $e');
+    } finally {
+      setState(() => _isGeneratingMeta = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final session = Provider.of<MeetingSessionProvider>(context).currentSession;
@@ -149,6 +227,40 @@ class _MeetingSummaryScreenState extends State<MeetingSummaryScreen> {
       appBar: AppBar(
         title: Text(title),
         actions: [
+          // 模型选择
+          if (_llmModels.isNotEmpty)
+            PopupMenuButton<String>(
+              icon: Chip(
+                label: Text(
+                  _selectedModelName,
+                  style: const TextStyle(fontSize: 11),
+                ),
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+              ),
+              tooltip: '切换 LLM 模型',
+              onSelected: _isGenerating ? null : (v) {
+                setState(() => _selectedModelName = v);
+              },
+              itemBuilder: (context) {
+                return _llmModels.map((m) {
+                  final isSelected = m.name == _selectedModelName;
+                  return PopupMenuItem<String>(
+                    value: m.name,
+                    child: Row(
+                      children: [
+                        if (isSelected)
+                          const Icon(Icons.check, size: 16, color: Colors.green)
+                        else
+                          const SizedBox(width: 16),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(m.name)),
+                      ],
+                    ),
+                  );
+                }).toList();
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.save),
             onPressed: _saveAndFinish,
@@ -185,13 +297,53 @@ class _MeetingSummaryScreenState extends State<MeetingSummaryScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.headlineSmall,
+                      Row(
+                        children: [
+                          const Icon(Icons.edit_note, size: 20),
+                          const SizedBox(width: 8),
+                          const Text(
+                            '会议信息',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                          const Spacer(),
+                          TextButton.icon(
+                            onPressed: _isGeneratingMeta ? null : _generateMeta,
+                            icon: _isGeneratingMeta
+                                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.auto_awesome, size: 16),
+                            label: const Text('AI 生成', style: TextStyle(fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _titleController,
+                        decoration: const InputDecoration(
+                          labelText: '会议标题',
+                          hintText: '请输入会议标题',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        maxLength: 20,
                       ),
                       const SizedBox(height: 8),
-                      if (_session.participants.isNotEmpty)
-                        Text('参会人员: ${_session.participants.map((p) => p.name).join(', ')}'),
+                      TextField(
+                        controller: _descriptionController,
+                        decoration: const InputDecoration(
+                          labelText: '会议简介',
+                          hintText: '请输入会议简介（可选）',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        maxLines: 2,
+                      ),
+                      if (_session.participants.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          '参会人员: ${_session.participants.map((p) => p.name).join(', ')}',
+                          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                        ),
+                      ],
                     ],
                   ),
                 ),
