@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:yanji/services/notifications_adapter.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
