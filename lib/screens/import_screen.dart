@@ -1,6 +1,9 @@
-import 'dart:io';
+import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:yanji/services/storage_service.dart';
+import 'package:yanji/models/meeting.dart';
+import 'package:yanji/utils/web_file_adapter.dart' as web_file;
 
 class ImportScreen extends StatefulWidget {
   const ImportScreen({super.key});
@@ -11,60 +14,12 @@ class ImportScreen extends StatefulWidget {
 
 class _ImportScreenState extends State<ImportScreen> {
   final StorageService _storageService = StorageService();
-  List<FileSystemEntity> _files = [];
   String _status = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _loadFiles();
-  }
-
-  Future<void> _loadFiles() async {
-    try {
-      final directory = await _storageService.getDocumentsDirectory();
-      final files = directory.listSync();
-      setState(() {
-        _files = files.where((file) => file is File).toList();
-      });
-    } catch (e) {
-      setState(() {
-        _status = '加载文件失败: $e';
-      });
-    }
-  }
-
-  Future<void> _pickAndImportFile() async {
-    try {
-      // Simplified file picking for demo purposes
-      setState(() {
-        _status = '文件导入功能暂未实现';
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('文件导入功能暂未实现')),
-        );
-      }
-    } catch (e) {
-      setState(() {
-        _status = '导入失败: $e';
-      });
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('导入失败: $e')),
-        );
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('导入会议'),
-      ),
+      appBar: AppBar(title: const Text('导入会议')),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -79,27 +34,76 @@ class _ImportScreenState extends State<ImportScreen> {
             Text(_status),
             const SizedBox(height: 20),
             const Text(
-              '最近导入的文件',
+              '支持格式',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
-            Expanded(
-              child: _files.isEmpty
-                  ? const Center(child: Text('未找到文件'))
-                  : ListView.builder(
-                      itemCount: _files.length,
-                      itemBuilder: (context, index) {
-                        final file = _files[index] as File;
-                        return ListTile(
-                          title: Text(file.path.split('/').last),
-                          subtitle: Text('${(file.lengthSync() / 1024).toStringAsFixed(2)} KB'),
-                        );
-                      },
-                    ),
-            ),
+            const Text('• TXT 文本文件 — 作为会议转录导入'),
+            const Text('• JSON 文件 — 完整会议数据导入'),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _pickAndImportFile() async {
+    try {
+      final content = await web_file.pickFile(
+        acceptedExtensions: ['.txt', '.json'],
+      );
+
+      if (content == null) {
+        setState(() => _status = '未选择文件');
+        return;
+      }
+
+      setState(() => _status = '正在导入...');
+
+      // Parse and save
+      Meeting meeting;
+      if (content.trimLeft().startsWith('{')) {
+        // JSON format
+        final map = Map<String, dynamic>.from(
+          jsonDecode(content.trim()),
+        );
+        // Try to parse as meeting
+        try {
+          meeting = Meeting.fromMap(map);
+        } catch (_) {
+          meeting = Meeting(
+            title: '导入的会议',
+            date: DateTime.now(),
+            transcript: content,
+            summary: '',
+            folderName: '',
+          );
+        }
+      } else {
+        // TXT format
+        meeting = Meeting(
+          title: '导入的会议 ${DateTime.now().month}-${DateTime.now().day}',
+          date: DateTime.now(),
+          transcript: content,
+          summary: '',
+          folderName: '',
+        );
+      }
+
+      await _storageService.saveMeeting(meeting);
+
+      if (mounted) {
+        setState(() => _status = '导入成功: ${meeting.title}');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('会议「${meeting.title}」已导入')),
+        );
+      }
+    } catch (e) {
+      setState(() => _status = '导入失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导入失败: $e')),
+        );
+      }
+    }
   }
 }

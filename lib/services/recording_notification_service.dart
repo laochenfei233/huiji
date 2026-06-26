@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:yanji/services/notifications_adapter.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -34,7 +34,7 @@ class RecordingNotificationService {
       iOS: iosSettings,
     );
 
-    await _plugin.initialize(initSettings);
+    await _plugin.initialize(settings: initSettings);
     await _createNotificationChannel();
     _initialized = true;
   }
@@ -108,16 +108,16 @@ class RecordingNotificationService {
     );
 
     await _plugin.show(
-      _notificationId,
-      timeStr,
-      '${isPaused ? '已暂停' : '录音中'}  |  $displayText',
-      NotificationDetails(android: androidDetails, iOS: iosDetails),
+      id: _notificationId,
+      title: timeStr,
+      body: '${isPaused ? '已暂停' : '录音中'}  |  $displayText',
+      notificationDetails: NotificationDetails(android: androidDetails, iOS: iosDetails),
     );
   }
 
   /// 取消录音通知
   static Future<void> cancelRecordingNotification() async {
     if (!_initialized) return;
-    await _plugin.cancel(_notificationId);
+    await _plugin.cancel(id: _notificationId);
   }
 }
