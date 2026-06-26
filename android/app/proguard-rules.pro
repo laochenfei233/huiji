@@ -1,0 +1,4 @@
+-keep class com.google.android.play.core.splitcompat.** { *; }
+-keep class com.google.android.play.core.tasks.** { *; }
+-dontwarn com.google.android.play.core.splitcompat.SplitCompatApplication
+-dontwarn com.google.android.play.core.tasks.OnFailureListener
