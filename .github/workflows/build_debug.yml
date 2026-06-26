@@ -117,6 +117,13 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Install CMake and NDK
+        run: |
+          sdkmanager "cmake;3.31.0" "ndk;28.0.12433566"
+
       - name: Clean previous builds
         run: flutter clean
 
