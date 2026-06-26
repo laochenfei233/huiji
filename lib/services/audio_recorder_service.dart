@@ -9,10 +9,9 @@ import 'package:record/record.dart';
 enum RecorderState { idle, recording, paused, error }
 
 /// 统一音频录制服务
-/// 方案 2：双 recorder 实例并发
-/// - PCM recorder: startStream() → 流式 PCM 给 ASR
-/// - Opus recorder: start(path) → 写 OGG Opus 文件
-/// 如果 Opus recorder 启动失败（平台不支持双实例），fallback 到 WAV
+/// 录音期间仅使用 PCM recorder（给 ASR 流式传输 + 累积数据）
+/// 录音结束后返回累积的 PCM 数据（用于 WAV 保存）
+/// 避免了双 recorder 并发导致 PCM 流被杀死的问题
 class AudioRecorderService {
   // PCM 流式 recorder（给 ASR）
   AudioRecorder? _pcmRecorder;
@@ -24,13 +23,16 @@ class AudioRecorderService {
   Timer? _durationTimer;
   String? _lastError;
 
-  // Opus 文件 recorder
-  AudioRecorder? _opusRecorder;
-  bool _opusRecorderActive = false;
+  // Opus 输出路径（录音结束后写入文件）
   String? _opusOutputPath;
 
-  // Fallback: WAV 模式下累积 PCM 数据
+  // 累积 PCM 数据（用于 WAV 保存或后续 Opus 编码）
   final List<int> _accumulatedPcm = [];
+
+  // 音频流健康监控
+  Timer? _healthCheckTimer;
+  int _lastAudioBytes = 0;
+  bool _audioStreamAlive = false;
 
   Stream<Uint8List> get audioStream => _audioStreamController.stream;
   RecorderState get state => _state;
@@ -38,11 +40,12 @@ class AudioRecorderService {
   String? get lastError => _lastError;
   bool get isRecording => _state == RecorderState.recording;
   bool get isPaused => _state == RecorderState.paused;
-  bool get isOpusRecording => _opusRecorderActive;
   String? get opusOutputPath => _opusOutputPath;
+  bool get isAudioStreamAlive => _audioStreamAlive;
 
   /// 开始录音
-  /// [opusOutputPath] 如果提供，尝试同时写入 Opus 文件；失败则 fallback WAV
+  /// 录音期间仅启动 PCM recorder（给 ASR 流式传输 + 累积数据）
+  /// [opusOutputPath] 仅保存路径，暂未使用
   Future<void> startRecording({String? opusOutputPath}) async {
     if (_state == RecorderState.recording) return;
 
@@ -54,7 +57,7 @@ class AudioRecorderService {
         }
       }
 
-      // === PCM recorder（给 ASR）===
+      // === PCM recorder（给 ASR 流式传输 + 累积数据）===
       final pcmRecorder = AudioRecorder();
       if (!kIsWeb) {
         final hasPerm = await pcmRecorder.hasPermission(request: false);
@@ -76,20 +79,54 @@ class AudioRecorderService {
       _lastError = null;
       _accumulatedPcm.clear();
 
+      // 保存 Opus 输出路径（录音结束后再写入文件）
+      _opusOutputPath = opusOutputPath;
+
+      int audioChunkCount = 0;
+      int totalBytes = 0;
       _captureSub = stream.listen(
         (data) {
+          audioChunkCount++;
+          totalBytes += data.length;
+          if (audioChunkCount <= 5 || audioChunkCount % 100 == 0) {
+            debugPrint('[AudioRecorder] PCM 数据 #$audioChunkCount: ${data.length} bytes, 累计 ${(totalBytes / 1024).toStringAsFixed(1)} KB');
+          }
           if (!_audioStreamController.isClosed) {
             _audioStreamController.add(data);
           }
-          // WAV fallback: 累积 PCM 数据
-          if (!_opusRecorderActive) {
-            _accumulatedPcm.addAll(data);
-          }
+          _audioStreamAlive = true;
+          // 始终累积 PCM 数据（用于 WAV fallback 或后续 Opus 写入）
+          _accumulatedPcm.addAll(data);
         },
         onError: (e) {
           _lastError = '音频采集错误: $e';
+          debugPrint('[AudioRecorder] 流错误: $e');
+        },
+        onDone: () {
+          debugPrint('[AudioRecorder] PCM 音频流已结束, 共 $audioChunkCount 块, ${(totalBytes / 1024).toStringAsFixed(1)} KB');
+          _audioStreamAlive = false;
+          if (_state == RecorderState.recording) {
+            _lastError = '音频流意外中断';
+            _state = RecorderState.error;
+          }
         },
       );
+
+      // 音频流健康监控：每 2 秒检查音频是否还在流动
+      _audioStreamAlive = true;
+      _lastAudioBytes = 0;
+      _healthCheckTimer?.cancel();
+      _healthCheckTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+        if (_state != RecorderState.recording) {
+          _healthCheckTimer?.cancel();
+          return;
+        }
+        final currentBytes = _accumulatedPcm.length;
+        if (currentBytes == _lastAudioBytes && currentBytes > 0) {
+          debugPrint('[AudioRecorder] 警告: 音频流可能已停止 (已采集 ${currentBytes} bytes)');
+        }
+        _lastAudioBytes = currentBytes;
+      });
 
       _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (_state == RecorderState.recording) {
@@ -97,11 +134,7 @@ class AudioRecorderService {
         }
       });
 
-      // === Opus recorder（并发尝试）===
-      if (opusOutputPath != null) {
-        _opusOutputPath = opusOutputPath;
-        await _tryStartOpusRecorder(opusOutputPath);
-      }
+      debugPrint('[AudioRecorder] 录音已启动（PCM 模式，Opus 将在停止后写入）');
     } catch (e) {
       _state = RecorderState.error;
       _lastError = e.toString();
@@ -109,47 +142,12 @@ class AudioRecorderService {
     }
   }
 
-  /// 尝试启动 Opus 文件 recorder
-  /// 失败时静默降级到 WAV 模式
-  Future<void> _tryStartOpusRecorder(String outputPath) async {
-    try {
-      final opusRecorder = AudioRecorder();
-      if (!kIsWeb) {
-        final hasPerm = await opusRecorder.hasPermission(request: false);
-        if (!hasPerm) {
-          await opusRecorder.dispose();
-          return; // 静默降级
-        }
-      }
-
-      await opusRecorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.opus,
-          sampleRate: 16000,
-          numChannels: 1,
-          bitRate: 32000, // 32kbps Opus，1小时 ≈ 14MB
-        ),
-        path: outputPath,
-      );
-
-      _opusRecorder = opusRecorder;
-      _opusRecorderActive = true;
-      print('Opus recorder 启动成功: $outputPath');
-    } catch (e) {
-      print('Opus recorder 启动失败，降级到 WAV: $e');
-      _opusRecorderActive = false;
-    }
-  }
-
-  /// 暂停录音（同时暂停两个 recorder）
+  /// 暂停录音
   Future<void> pauseRecording() async {
     if (_state != RecorderState.recording) return;
 
     try {
       await _pcmRecorder?.pause();
-      if (_opusRecorderActive) {
-        await _opusRecorder?.pause();
-      }
       _state = RecorderState.paused;
       _durationTimer?.cancel();
     } catch (e) {
@@ -163,9 +161,6 @@ class AudioRecorderService {
 
     try {
       await _pcmRecorder?.resume();
-      if (_opusRecorderActive) {
-        await _opusRecorder?.resume();
-      }
       _state = RecorderState.recording;
       _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (_state == RecorderState.recording) {
@@ -178,12 +173,14 @@ class AudioRecorderService {
   }
 
   /// 停止录音
-  /// 返回值：如果 Opus recorder 失败（WAV fallback），返回累积的 PCM 数据
+  /// 停止 PCM recorder，返回累积的 PCM 数据（用于 WAV 保存）
   Future<Uint8List?> stopRecording() async {
     _captureSub?.cancel();
     _captureSub = null;
     _durationTimer?.cancel();
     _durationTimer = null;
+    _healthCheckTimer?.cancel();
+    _healthCheckTimer = null;
 
     Uint8List? fallbackPcm;
 
@@ -196,24 +193,15 @@ class AudioRecorderService {
     } catch (_) {}
     _pcmRecorder = null;
 
-    // 停止 Opus recorder
-    if (_opusRecorderActive) {
-      try {
-        await _opusRecorder?.stop();
-      } catch (_) {}
-      try {
-        await _opusRecorder?.dispose();
-      } catch (_) {}
-      _opusRecorder = null;
-      _opusRecorderActive = false;
-      _opusOutputPath = null;
+    // 返回累积的 PCM 数据（用于 WAV 保存）
+    if (_accumulatedPcm.isNotEmpty) {
+      fallbackPcm = Uint8List.fromList(_accumulatedPcm);
+      debugPrint('[AudioRecorder] 停止录音，返回 ${(fallbackPcm.length / 1024).toStringAsFixed(1)} KB PCM 数据');
     } else {
-      // WAV fallback: 返回累积的 PCM 数据
-      if (_accumulatedPcm.isNotEmpty) {
-        fallbackPcm = Uint8List.fromList(_accumulatedPcm);
-      }
-      _accumulatedPcm.clear();
+      debugPrint('[AudioRecorder] 停止录音，无累积数据');
     }
+    _accumulatedPcm.clear();
+    _opusOutputPath = null;
 
     _state = RecorderState.idle;
     return fallbackPcm;
@@ -221,7 +209,15 @@ class AudioRecorderService {
 
   /// 释放资源
   void dispose() {
-    stopRecording();
+    _captureSub?.cancel();
+    _captureSub = null;
+    _durationTimer?.cancel();
+    _durationTimer = null;
+    _healthCheckTimer?.cancel();
+    _healthCheckTimer = null;
+    try { _pcmRecorder?.stop(); } catch (_) {}
+    try { _pcmRecorder?.dispose(); } catch (_) {}
+    _pcmRecorder = null;
     _audioStreamController.close();
   }
 }

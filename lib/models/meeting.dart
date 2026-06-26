@@ -12,6 +12,7 @@ class Meeting {
   final List<Participant> participants;
   final int recordingDuration;
   final String folderName;
+  final String description;
 
   Meeting({
     this.id,
@@ -22,6 +23,7 @@ class Meeting {
     this.participants = const [],
     this.recordingDuration = 0,
     required this.folderName,
+    this.description = '',
   });
 
   /// 索引视图：不加载 transcript/summary
@@ -33,6 +35,7 @@ class Meeting {
       'participants': participants.map((p) => p.toJson()).toList(),
       'recordingDuration': recordingDuration,
       'folderName': folderName,
+      'description': description,
     };
   }
 
@@ -69,6 +72,7 @@ class Meeting {
       participants: parseParticipants(map['participants']),
       recordingDuration: map['recordingDuration'] as int? ?? 0,
       folderName: map['folderName'] ?? '',
+      description: map['description'] as String? ?? '',
     );
   }
 
@@ -207,16 +211,4 @@ class Participant {
           DateTime.tryParse(json['joinTime'] as String? ?? '') ?? DateTime.now(),
     );
   }
-}
-
-class TranscriptSegment {
-  final String speakerId;
-  final String text;
-  final DateTime timestamp;
-
-  TranscriptSegment({
-    required this.speakerId,
-    required this.text,
-    required this.timestamp,
-  });
 }

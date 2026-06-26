@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:yanji/widgets/sidebar.dart';
 import 'package:yanji/screens/meeting_list_screen.dart';
 import 'package:yanji/screens/audio_test_screen.dart';
 import 'package:yanji/screens/settings_screen.dart';
 import 'package:yanji/screens/statistics_screen.dart';
 import 'package:yanji/screens/log_viewer_screen.dart';
+import 'package:yanji/providers/meeting_session_provider.dart';
+import 'package:yanji/utils/config_loader.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -262,7 +265,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Widget? _buildFab() {
     if (_selectedIndex == 0) {
       return FloatingActionButton(
-        onPressed: () => Navigator.of(context).pushNamed('/meeting-setup'),
+        onPressed: _startNewMeeting,
         child: const Icon(Icons.add),
         tooltip: '开始新会议',
       );
@@ -277,5 +280,28 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       );
     }
     return null;
+  }
+
+  Future<void> _startNewMeeting() async {
+    final provider = Provider.of<MeetingSessionProvider>(context, listen: false);
+    final config = await ConfigLoader.loadConfig();
+
+    // 自动标题：会议 MM-dd HH:mm
+    final now = DateTime.now();
+    final title = '会议 ${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+
+    // 取第一个可用的 ASR 和摘要模型
+    final asrModel = config.asrModels.isNotEmpty ? config.asrModels.first.name : '';
+    final summaryModel = config.llmModels.isNotEmpty ? config.llmModels.first.name : '';
+
+    await provider.createSession(
+      title: title,
+      asrModelName: asrModel,
+      summaryModelName: summaryModel,
+    );
+
+    if (mounted) {
+      Navigator.of(context).pushNamed('/meeting-recording');
+    }
   }
 }

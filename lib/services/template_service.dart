@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:yanji/models/template.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -54,7 +55,7 @@ class TemplateService {
           .map((data) => Template.fromJson(Map<String, dynamic>.from(data)))
           .toList();
     } catch (e) {
-      print('Error loading custom templates: $e');
+      debugPrint('Error loading custom templates: $e');
       return [];
     }
   }

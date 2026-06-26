@@ -8,7 +8,6 @@ class ThemeUtils {
   static const Color _surfaceDark = Color(0xFF1A1A1A);       // 深色背景
   static const Color _cardLight = Color(0xFFFFFFFF);         // 白色卡片
   static const Color _cardDark = Color(0xFF2A2A2A);          // 深色卡片
-  static const Color _accentOrange = Color(0xFFFF6D00);      // 橙色强调
 
   static ThemeData get lightTheme {
     final colorScheme = ColorScheme.fromSeed(

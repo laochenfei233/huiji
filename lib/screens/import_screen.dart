@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:yanji/models/meeting.dart';
 import 'package:yanji/services/storage_service.dart';
 
 class ImportScreen extends StatefulWidget {

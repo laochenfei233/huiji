@@ -1,8 +1,6 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:yanji/screens/edit_meeting_screen.dart';
 import 'package:yanji/screens/meeting_detail_screen.dart';
-import 'package:yanji/screens/recording_screen.dart';
 import 'package:yanji/models/meeting.dart';
 import 'package:yanji/services/storage_service.dart';
 
@@ -21,6 +19,7 @@ class _MeetingListScreenState extends State<MeetingListScreen> {
   bool _isSearching = false;
   String? _databaseError;
   bool _isLoading = true;
+  bool _hasLoaded = false;
 
   @override
   void initState() {
@@ -32,7 +31,10 @@ class _MeetingListScreenState extends State<MeetingListScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _loadMeetings();
+    if (_hasLoaded) {
+      _loadMeetings();
+    }
+    _hasLoaded = true;
   }
 
   Future<void> _loadMeetings() async {
@@ -164,11 +166,6 @@ class _MeetingListScreenState extends State<MeetingListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // 每次 build 都刷新数据，确保导航回来时显示最新
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadMeetings();
-    });
-
     final meetings = _isSearching ? (_filteredMeetings ?? []) : _allMeetings;
 
     return Scaffold(
@@ -241,9 +238,7 @@ class _MeetingListScreenState extends State<MeetingListScreen> {
                             itemBuilder: (context, index) {
                               final meeting = meetings[index];
                               return GestureDetector(
-                                onSecondaryTapUp: (kIsWeb || !kIsWeb)
-                                    ? (details) => _showMeetingContextMenu(meeting)
-                                    : null,
+                                onSecondaryTapUp: (details) => _showMeetingContextMenu(meeting),
                                 child: Card(
                                   elevation: 2,
                                   shape: RoundedRectangleBorder(

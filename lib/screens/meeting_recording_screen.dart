@@ -2,14 +2,17 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:yanji/models/meeting_session.dart';
 import 'package:yanji/providers/meeting_session_provider.dart';
 import 'package:yanji/services/audio_recorder_service.dart';
 import 'package:yanji/services/asr_service.dart';
 import 'package:yanji/services/llm_service.dart';
 import 'package:yanji/services/storage_service.dart';
+import 'package:yanji/services/recording_notification_service.dart';
+import 'package:yanji/screens/settings_screen.dart';
 import 'package:yanji/utils/config_loader.dart';
 
 class MeetingRecordingScreen extends StatefulWidget {
@@ -19,7 +22,7 @@ class MeetingRecordingScreen extends StatefulWidget {
   State<MeetingRecordingScreen> createState() => _MeetingRecordingScreenState();
 }
 
-class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with SingleTickerProviderStateMixin {
+class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
   bool _isRecording = false;
   bool _isPaused = false;
   bool _isProcessing = false;
@@ -29,14 +32,15 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
   String _transcriptText = '';
   String _currentTranscription = '';
   String _connectionStatus = '';
+  int _httpAsrIntervalSec = 3;
   bool _transcriptExpanded = false;
-  AnimationController? _transcriptAnimController;
-  Animation<double>? _transcriptHeightAnimation;
-  int _httpAsrIntervalSec = 3; // HTTP ASR 发送间隔
+  double _transcriptPanelHeight = 120;
 
   AudioRecorderService? _audioRecorder;
   AsrService? _asrService;
   LLMService? _llmService;
+  ASRModelConfig? _asrConfig;
+  List<ASRModelConfig> _allAsrModels = [];
   StreamSubscription<Uint8List>? _audioDataSubscription;
   StreamSubscription<AsrResult>? _asrSubscription;
   StreamSubscription<AsrStatus>? _asrStatusSubscription;
@@ -44,10 +48,7 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
   @override
   void initState() {
     super.initState();
-    _transcriptAnimController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300),
-    );
+    RecordingNotificationService.init();
     // 延迟初始化，确保 context 可用
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeServices();
@@ -63,7 +64,8 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
     _audioDataSubscription?.cancel();
     _audioRecorder?.dispose();
     _asrService?.dispose();
-    _transcriptAnimController?.dispose();
+    // 确保退出时关闭 wakelock
+    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -73,18 +75,26 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
   MeetingSession get _session => _provider.currentSession!;
 
   Future<void> _initializeServices() async {
+    debugPrint('[Recording] _initializeServices 开始');
     try {
       final config = await ConfigLoader.loadConfig();
+      _allAsrModels = config.asrModels;
+      debugPrint('[Recording] ASR模型数量: ${_allAsrModels.length}, 名称: ${_allAsrModels.map((m) => m.name).toList()}');
+
+      // 如果 session 没有指定 ASR 模型，使用第一个
+      final asrModelName = _session.asrModelName.isNotEmpty
+          ? _session.asrModelName
+          : (config.asrModels.isNotEmpty ? config.asrModels.first.name : '');
+      debugPrint('[Recording] 选择ASR模型: $asrModelName (session.asrModelName=${_session.asrModelName})');
+
       final asrConfig = config.asrModels.firstWhere(
-        (model) => model.name == _session.asrModelName,
+        (model) => model.name == asrModelName,
         orElse: () => config.asrModels.first,
       );
-      final llmConfig = config.llmModels.firstWhere(
-        (model) => model.name == _session.summaryModelName,
-        orElse: () => config.llmModels.first,
-      );
+      debugPrint('[Recording] ASR配置: type=${asrConfig.type}, url=${asrConfig.url}');
 
       _audioRecorder = AudioRecorderService();
+      _asrConfig = asrConfig;
       _asrService = AsrServiceFactory.create(asrConfig);
       _httpAsrIntervalSec = asrConfig.httpAsrIntervalSec;
 
@@ -101,6 +111,11 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
       _audioDataSubscription = _audioRecorder!.audioStream.listen(
         (audioData) {
           _accumulatedAudio.addAll(audioData);
+          // 防止内存无限增长：超出上限时丢弃旧数据
+          if (_accumulatedAudio.length > _maxAudioBufferSize) {
+            final overflow = _accumulatedAudio.length - _maxAudioBufferSize;
+            _accumulatedAudio.removeRange(0, overflow);
+          }
         },
         onError: (error) => _showError('音频处理错误: $error'),
       );
@@ -142,23 +157,28 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
         },
         onError: (error) => _showError('ASR错误: $error'),
       );
+      debugPrint('[Recording] ASR transcriptionStream 订阅已建立, asrService=${_asrService.runtimeType}');
 
       if (mounted) {
         setState(() => _isInitialized = true);
       }
 
-    } catch (e) {
+    } catch (e, stack) {
+      debugPrint('[Recording] 初始化失败: $e\n$stack');
       _showError('初始化失败: $e');
     }
   }
 
   // HTTP ASR 累积音频（用于 qwen-audio-turbo 等 HTTP 模型）
+  // 16kHz 16bit mono PCM: 1秒 = 32KB, 10MB ≈ 5分钟音频
+  static const int _maxAudioBufferSize = 10 * 1024 * 1024;
   final List<int> _accumulatedAudio = [];
   Timer? _httpAsrTimer;
 
   String _lastPartial = '';
 
   void _onAsrResult(AsrResult result) {
+    debugPrint('[Recording] _onAsrResult called: text="${result.text}", isFinal=${result.isFinal}');
     setState(() {
       if (result.isFinal) {
         final prefix = result.speaker != null ? '[${result.speaker}] ' : '';
@@ -184,7 +204,17 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
       }
     });
 
+    debugPrint('[Recording] _transcriptText更新后: "${_transcriptText}" (长度: ${_transcriptText.length})');
     _provider.updateTranscript(_transcriptText);
+
+    // 更新通知栏
+    if (_isRecording) {
+      RecordingNotificationService.showRecordingNotification(
+        isPaused: _isPaused,
+        duration: _recordingSeconds,
+        transcript: _transcriptText,
+      );
+    }
   }
 
   Future<void> _processAudioDataHttp() async {
@@ -203,7 +233,8 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
         _onAsrResult(AsrResult(text: transcription, isFinal: true));
       }
     } catch (e) {
-      _accumulatedAudio.insertAll(0, audioData);
+      // 转录失败时将音频数据放回缓冲区（追加到末尾而非头部，避免 O(n) 移动）
+      _accumulatedAudio.addAll(audioData);
       if (mounted) {
         _showError('转录错误: $e');
       }
@@ -216,6 +247,36 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
       return;
     }
 
+    // 检查 API Key 是否已配置（local_funasr/local_funasr_onnx 不需要 key）
+    if (_asrConfig != null &&
+        _asrConfig!.type != 'local_funasr' &&
+        _asrConfig!.type != 'local_funasr_onnx' &&
+        _asrConfig!.key.isEmpty) {
+      if (mounted) {
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('未配置 API Key'),
+            content: const Text('当前选择的 ASR 模型需要填写 API Key 才能使用，请先前往设置页面配置。'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('确定'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
+                },
+                child: const Text('跳转到设置'),
+              ),
+            ],
+          ),
+        );
+      }
+      return;
+    }
+
     try {
       setState(() {
         _isRecording = true;
@@ -224,13 +285,18 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
         _accumulatedAudio.clear();
       });
 
-      // 开始录音（尝试同时写 Opus 文件到临时路径，失败则 fallback WAV）
-      final tempDir = await getTemporaryDirectory();
-      final tempOpusPath = '${tempDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.opus';
-      await _audioRecorder!.startRecording(opusOutputPath: tempOpusPath);
+      // 开始录音（仅 PCM 模式，避免双 recorder 冲突导致音频流中断）
+      await _audioRecorder!.startRecording();
 
       // 启动 ASR 识别（连接 WebSocket / 启动 HTTP 轮询）
       await _asrService!.start(audioStream: _audioRecorder!.audioStream);
+
+      // 保持屏幕唤醒（锁屏时继续录音）- 根据用户设置
+      final prefs = await SharedPreferences.getInstance();
+      final lockScreenRecording = prefs.getBool('lock_screen_recording') ?? true;
+      if (lockScreenRecording) {
+        await WakelockPlus.enable();
+      }
 
       // 开始计时
       _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -238,6 +304,12 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
           setState(() {
             _recordingSeconds++;
           });
+          // 更新通知栏
+          RecordingNotificationService.showRecordingNotification(
+            isPaused: false,
+            duration: _recordingSeconds,
+            transcript: _transcriptText,
+          );
         }
       });
 
@@ -251,6 +323,17 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
       }
 
       _showMessage('录音已开始');
+
+      // 延迟检查音频流是否正常
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted && _isRecording && _audioRecorder != null) {
+          if (!_audioRecorder!.isAudioStreamAlive) {
+            _showError('音频流未正常启动，请检查麦克风权限后重试');
+          } else if (_accumulatedAudio.isEmpty) {
+            _showError('未采集到音频数据，请检查麦克风');
+          }
+        }
+      });
 
     } catch (e) {
       // ASR 连接失败时确保音频录制器也停止
@@ -273,6 +356,12 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
         _isPaused = true;
       });
       _recordingTimer?.cancel();
+      // 更新通知
+      RecordingNotificationService.showRecordingNotification(
+        isPaused: true,
+        duration: _recordingSeconds,
+        transcript: _transcriptText,
+      );
     } catch (e) {
       _showError('暂停录音失败: $e');
     }
@@ -292,6 +381,12 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
           setState(() {
             _recordingSeconds++;
           });
+          // 更新通知栏
+          RecordingNotificationService.showRecordingNotification(
+            isPaused: false,
+            duration: _recordingSeconds,
+            transcript: _transcriptText,
+          );
         }
       });
     } catch (e) {
@@ -312,8 +407,14 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
       _recordingTimer?.cancel();
       _httpAsrTimer?.cancel();
 
+      // 取消录音通知
+      await RecordingNotificationService.cancelRecordingNotification();
+
       // 停止 ASR 服务
       await _asrService?.stop();
+
+      // 停止保持唤醒
+      await WakelockPlus.disable();
 
       // 处理剩余的音频（HTTP ASR）
       if (_llmService != null && _accumulatedAudio.isNotEmpty) {
@@ -324,6 +425,7 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
       final fallbackPcm = await _audioRecorder!.stopRecording();
 
       // 保存转录和时长到 session
+      debugPrint('[Recording] _stopRecording: _transcriptText="${_transcriptText}" (长度: ${_transcriptText.length})');
       await _provider.updateSession(_session.copyWith(
         originalTranscript: _transcriptText,
         recordingDuration: _recordingSeconds,
@@ -332,24 +434,14 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
       // 自动保存（创建/更新会议记录 + 文件夹）
       await _provider.autoSave();
 
-      // 保存音频到会议文件夹
+      // 保存音频到会议文件夹（WAV 格式）
       final meetingId = _provider.currentSession?.metadata['savedMeetingId'] as int?;
       if (meetingId != null) {
         final storage = StorageService();
         final folderPath = await storage.getMeetingFolderPath(meetingId);
-        if (folderPath != null) {
-          if (_audioRecorder!.isOpusRecording) {
-            // Opus recorder 已写到临时路径，移动到会议文件夹
-            final tempOpus = _audioRecorder!.opusOutputPath;
-            if (tempOpus != null && File(tempOpus).existsSync()) {
-              await File(tempOpus).copy('$folderPath/recording.opus');
-              await File(tempOpus).delete();
-            }
-          } else if (fallbackPcm != null && fallbackPcm.isNotEmpty) {
-            // WAV fallback：将累积的 PCM 保存为 WAV
-            final audioFile = File('$folderPath/recording.wav');
-            await savePcmAsWav(fallbackPcm, audioFile.path);
-          }
+        if (folderPath != null && fallbackPcm != null && fallbackPcm.isNotEmpty) {
+          final audioFile = File('$folderPath/recording.wav');
+          await savePcmAsWav(fallbackPcm, audioFile.path);
         }
       }
 
@@ -435,11 +527,59 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
 
   @override
   Widget build(BuildContext context) {
-    final session = _session;
     return Scaffold(
       appBar: AppBar(
-        title: Text(session.title),
+        title: GestureDetector(
+          onTap: _isRecording ? null : _editTitle,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  _session.title,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (!_isRecording) ...[
+                const SizedBox(width: 4),
+                Icon(Icons.edit, size: 16, color: Colors.grey.shade400),
+              ],
+            ],
+          ),
+        ),
         actions: [
+          // ASR 模型选择
+          if (_allAsrModels.length > 1)
+            PopupMenuButton<String>(
+              icon: Chip(
+                label: Text(
+                  _asrConfig?.name ?? 'ASR',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+              ),
+              tooltip: '切换 ASR 模型',
+              onSelected: _isRecording ? null : _switchAsrModel,
+              itemBuilder: (context) {
+                return _allAsrModels.map((model) {
+                  final isSelected = model.name == _asrConfig?.name;
+                  return PopupMenuItem<String>(
+                    value: model.name,
+                    child: Row(
+                      children: [
+                        if (isSelected)
+                          const Icon(Icons.check, size: 16, color: Colors.green)
+                        else
+                          const SizedBox(width: 16),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(model.name)),
+                      ],
+                    ),
+                  );
+                }).toList();
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.help_outline),
             onPressed: _showHelp,
@@ -475,14 +615,14 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
       child: Column(
         children: [
           LinearProgressIndicator(
-            value: 2/3,
+            value: _transcriptText.isEmpty ? 0.3 : 0.6,
             backgroundColor: Colors.grey.shade300,
           ),
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('第2步：录音转录'),
+              const Text('录音转录'),
               Text(
                 _isRecording && !_isPaused ? '录音中...' :
                 _isPaused ? '已暂停' :
@@ -506,21 +646,23 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
   Widget _buildRecordingPanel() {
     return Card(
       margin: const EdgeInsets.all(16),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _buildRecordingStatus(),
-            const SizedBox(height: 16),
-            _buildRecordingButton(),
-            const SizedBox(height: 16),
-            _buildTimer(),
-            const SizedBox(height: 16),
-            _buildTranscriptionPanel(),
-            const SizedBox(height: 12),
-            _buildActionButtons(),
-          ],
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _buildRecordingStatus(),
+              const SizedBox(height: 16),
+              _buildRecordingButton(),
+              const SizedBox(height: 16),
+              _buildTimer(),
+              const SizedBox(height: 16),
+              _buildTranscriptionPanel(),
+              const SizedBox(height: 12),
+              _buildActionButtons(),
+            ],
+          ),
         ),
       ),
     );
@@ -570,26 +712,6 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
             child: _buildDebugInfo(),
           ),
         ],
-        if (false && _currentTranscription.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.blue.shade50,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.blue.shade200),
-            ),
-            child: Text(
-              '实时转录: $_currentTranscription',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.blue.shade700,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
       ],
     );
   }
@@ -598,6 +720,7 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
     final wsInfo = _asrService is FunASRRealtimeService
         ? (_asrService! as FunASRRealtimeService)
         : null;
+    final streamAlive = _audioRecorder?.isAudioStreamAlive ?? false;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -606,9 +729,22 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
           _connectionStatus.isNotEmpty ? _connectionStatus : '状态: 等待连接...',
           style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
         ),
-        Text(
-          '音频: ${(_accumulatedAudio.length / 1024).toStringAsFixed(1)} KB 已采集',
-          style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+        Row(
+          children: [
+            Icon(
+              streamAlive ? Icons.circle : Icons.error_outline,
+              size: 10,
+              color: streamAlive ? Colors.green : Colors.red,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '音频: ${(_accumulatedAudio.length / 1024).toStringAsFixed(1)} KB ${streamAlive ? "采集中" : "已中断"}',
+              style: TextStyle(
+                fontSize: 11,
+                color: streamAlive ? Colors.grey.shade600 : Colors.red,
+              ),
+            ),
+          ],
         ),
         if (wsInfo != null) ...[
           Text(
@@ -712,163 +848,108 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
 
   Widget _buildTranscriptionPanel() {
     final screenHeight = MediaQuery.of(context).size.height;
-    final maxTranscriptHeight = screenHeight / 2;
+    final collapsedHeight = 120.0; // 3行文本高度
+    final expandedHeight = screenHeight / 2; // 半屏
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // 计算文本自然高度
-        final textContent = _transcriptText.isNotEmpty
-            ? _transcriptText
-            : (_currentTranscription.isNotEmpty
-                ? '正在处理: $_currentTranscription'
-                : '开始录音后将显示实时转录内容...\n\n转录文本将自动保存到会议记录中');
-        final textPainter = TextPainter(
-          text: TextSpan(
-            text: textContent,
-            style: const TextStyle(fontSize: 14, height: 1.5),
-          ),
-          maxLines: null,
-          textDirection: TextDirection.ltr,
-        )..layout(maxWidth: constraints.maxWidth - 24);
-        final naturalHeight = textPainter.height + 24; // + padding
+    final textContent = _transcriptText.isNotEmpty
+        ? _transcriptText
+        : (_currentTranscription.isNotEmpty
+            ? '正在处理: $_currentTranscription'
+            : '开始录音后将显示实时转录内容...\n\n转录文本将自动保存到会议记录中');
 
-        final targetHeight = _transcriptExpanded
-            ? maxTranscriptHeight
-            : naturalHeight.clamp(80.0, maxTranscriptHeight);
-
-        // 首次设置动画
-        if (_transcriptHeightAnimation == null) {
-          _transcriptHeightAnimation = Tween<double>(
-            begin: targetHeight,
-            end: targetHeight,
-          ).animate(CurvedAnimation(
-            parent: _transcriptAnimController!,
-            curve: Curves.easeInOut,
-          ));
-        }
-
-        return Column(
+    return GestureDetector(
+      onVerticalDragUpdate: (details) {
+        setState(() {
+          _transcriptPanelHeight -= details.delta.dy;
+          _transcriptPanelHeight = _transcriptPanelHeight.clamp(collapsedHeight, expandedHeight);
+        });
+      },
+      onVerticalDragEnd: (details) {
+        // 根据速度和位置决定展开或收起
+        final velocity = details.primaryVelocity ?? 0;
+        setState(() {
+          if (velocity.abs() > 200) {
+            // 快速滑动：根据方向决定
+            _transcriptExpanded = velocity < 0;
+          } else {
+            // 慢速拖拽：根据当前位置决定
+            _transcriptExpanded = _transcriptPanelHeight > (collapsedHeight + expandedHeight) / 2;
+          }
+          _transcriptPanelHeight = _transcriptExpanded ? expandedHeight : collapsedHeight;
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        height: _transcriptPanelHeight,
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.grey.shade300),
+        ),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            GestureDetector(
-              onVerticalDragEnd: _transcriptText.isNotEmpty
-                  ? (details) {
-                      if (details.primaryVelocity != null) {
-                        if (details.primaryVelocity! < -50) {
-                          _expandTranscript(maxTranscriptHeight);
-                        } else if (details.primaryVelocity! > 50) {
-                          _collapseTranscript(naturalHeight);
-                        }
-                      }
-                    }
-                  : null,
-              child: AnimatedBuilder(
-                animation: _transcriptAnimController!,
-                builder: (context, child) {
-                  final height = _transcriptHeightAnimation?.value ?? targetHeight;
-                  return Container(
-                    height: height,
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.grey.shade300),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.subtitles, size: 20),
-                            const SizedBox(width: 8),
-                            const Text(
-                              '转录文本',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const Spacer(),
-                            if (_isProcessing)
-                              const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              ),
-                            if (_transcriptText.isNotEmpty) ...[
-                              const SizedBox(width: 8),
-                              Icon(
-                                _transcriptExpanded
-                                    ? Icons.keyboard_arrow_down
-                                    : Icons.keyboard_arrow_up,
-                                size: 20,
-                                color: Colors.grey,
-                              ),
-                            ],
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Expanded(
-                          child: _transcriptText.isEmpty && !_isProcessing
-                              ? const Center(
-                                  child: Text(
-                                    '开始录音后将显示实时转录内容...\n\n转录文本将自动保存到会议记录中',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: Colors.grey,
-                                      height: 1.5,
-                                    ),
-                                  ),
-                                )
-                              : SingleChildScrollView(
-                                  child: Text(
-                                    textContent,
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      height: 1.5,
-                                    ),
-                                  ),
-                                ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
+            // 拖拽手柄
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade400,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
+            Row(
+              children: [
+                const Icon(Icons.subtitles, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '转录文本',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const Spacer(),
+                if (_isProcessing)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: _transcriptText.isEmpty && !_isProcessing
+                  ? const Center(
+                      child: Text(
+                        '开始录音后将显示实时转录内容...',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.grey,
+                          height: 1.5,
+                        ),
+                      ),
+                    )
+                  : SingleChildScrollView(
+                      child: Text(
+                        textContent,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+            ),
           ],
-        );
-      },
+        ),
+      ),
     );
-  }
-
-  void _expandTranscript(double maxHeight) {
-    if (_transcriptExpanded) return;
-    final currentHeight = _transcriptHeightAnimation?.value ?? 80.0;
-    _transcriptHeightAnimation = Tween<double>(
-      begin: currentHeight,
-      end: maxHeight,
-    ).animate(CurvedAnimation(
-      parent: _transcriptAnimController!,
-      curve: Curves.easeOutCubic,
-    ));
-    _transcriptAnimController!.forward(from: 0);
-    setState(() => _transcriptExpanded = true);
-  }
-
-  void _collapseTranscript(double naturalHeight) {
-    if (!_transcriptExpanded) return;
-    final currentHeight = _transcriptHeightAnimation?.value ?? naturalHeight;
-    _transcriptHeightAnimation = Tween<double>(
-      begin: currentHeight,
-      end: naturalHeight,
-    ).animate(CurvedAnimation(
-      parent: _transcriptAnimController!,
-      curve: Curves.easeInCubic,
-    ));
-    _transcriptAnimController!.forward(from: 0);
-    setState(() => _transcriptExpanded = false);
   }
 
   Widget _buildActionButtons() {
@@ -941,5 +1022,105 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> with Si
         ],
       ),
     );
+  }
+
+  void _editTitle() {
+    final controller = TextEditingController(text: _session.title);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('修改会议标题'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '请输入会议标题',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final newTitle = controller.text.trim();
+              if (newTitle.isNotEmpty) {
+                _provider.updateSession(_session.copyWith(title: newTitle));
+                setState(() {});
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _switchAsrModel(String modelName) async {
+    final config = await ConfigLoader.loadConfig();
+    final newConfig = config.asrModels.firstWhere(
+      (m) => m.name == modelName,
+      orElse: () => config.asrModels.first,
+    );
+
+    // 如果正在录音，不能切换
+    if (_isRecording) {
+      _showError('录音中不能切换模型');
+      return;
+    }
+
+    // 更新 session 的 ASR 模型
+    await _provider.updateSession(_session.copyWith(asrModelName: modelName));
+
+    // 重新初始化 ASR 服务
+    _asrService?.dispose();
+    setState(() {
+      _asrConfig = newConfig;
+      _httpAsrIntervalSec = newConfig.httpAsrIntervalSec;
+    });
+
+    _asrService = AsrServiceFactory.create(newConfig);
+    _asrStatusSubscription?.cancel();
+    _asrStatusSubscription = _asrService!.statusStream.listen((status) {
+      if (!mounted) return;
+      setState(() {
+        switch (status) {
+          case AsrStatus.connecting:
+            _connectionStatus = '正在连接 ASR 服务...';
+            break;
+          case AsrStatus.recognizing:
+            _connectionStatus = 'ASR 已连接，实时识别中';
+            break;
+          case AsrStatus.error:
+            _connectionStatus = 'ASR 连接失败';
+            break;
+          case AsrStatus.disconnected:
+            _connectionStatus = 'ASR 已断开';
+            break;
+          case AsrStatus.stopped:
+            _connectionStatus = 'ASR 已停止';
+            break;
+          case AsrStatus.connected:
+            _connectionStatus = 'ASR 已连接';
+            break;
+        }
+      });
+    });
+
+    // 重新订阅识别结果流
+    _asrSubscription?.cancel();
+    _asrSubscription = _asrService!.transcriptionStream.listen(
+      (result) {
+        if (!mounted) return;
+        _onAsrResult(result);
+      },
+      onError: (error) => _showError('ASR错误: $error'),
+    );
+    debugPrint('[Recording] 切换模型后重新订阅 transcriptionStream');
+
+    _showMessage('已切换到 ${newConfig.name}');
   }
 }

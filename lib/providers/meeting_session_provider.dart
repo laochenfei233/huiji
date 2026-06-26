@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:ui'; // 添加 Color 类
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart'; // 添加 Colors 类
+import 'package:flutter/material.dart';
 import 'package:yanji/models/meeting.dart';
 import 'package:yanji/models/meeting_session.dart';
 import 'package:yanji/services/storage_service.dart';
@@ -227,6 +225,8 @@ class MeetingSessionProvider extends ChangeNotifier {
       final transcript = _currentSession!.originalTranscript;
       final summary = _currentSession!.summaryText ?? '';
 
+      debugPrint('[AutoSave] existingId=$existingId, title=${_currentSession!.title}, transcript长度=${transcript.length}');
+
       final meeting = Meeting(
         id: existingId,
         title: _currentSession!.title,
@@ -259,8 +259,8 @@ class MeetingSessionProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e, stackTrace) {
-      print('自动保存失败: $e');
-      print('堆栈: $stackTrace');
+      debugPrint('自动保存失败: $e');
+      debugPrint('堆栈: $stackTrace');
     }
   }
 
@@ -303,8 +303,8 @@ class MeetingSessionProvider extends ChangeNotifier {
         await storage.saveMeeting(meeting);
       }
     } catch (e, stackTrace) {
-      print('保存会议到数据库失败: $e');
-      print('堆栈: $stackTrace');
+      debugPrint('保存会议到数据库失败: $e');
+      debugPrint('堆栈: $stackTrace');
     }
 
     _emitEvent(SessionEventType.completed, _currentSession!.id, {
@@ -335,19 +335,15 @@ class MeetingSessionProvider extends ChangeNotifier {
 
   /// 从历史记录加载会话
   Future<MeetingSession?> loadSession(String sessionId) async {
-    final session = _sessions.firstWhere(
-      (s) => s.id == sessionId,
-      orElse: () => null as MeetingSession,
-    );
-    
-    if (session != null) {
+    try {
+      final session = _sessions.firstWhere((s) => s.id == sessionId);
       _currentSession = session;
       notifyListeners();
       return session;
+    } catch (_) {
+      _handleError('未找到会话: $sessionId');
+      return null;
     }
-    
-    _handleError('未找到会话: $sessionId');
-    return null;
   }
 
   /// 删除会话
