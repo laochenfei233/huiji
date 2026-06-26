@@ -8,29 +8,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-web-debug:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.35.6'
-          channel: 'stable'
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build Web Debug
-        run: flutter build web --debug
-
-      - name: Archive Web Debug
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-debug
-          path: build/web/
-
   build-linux-debug:
     runs-on: ubuntu-latest
     steps:

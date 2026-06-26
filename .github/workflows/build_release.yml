@@ -8,29 +8,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-web-release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.35.6'
-          channel: 'stable'
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build Web Release
-        run: flutter build web --release --no-tree-shake-icons --dart-define=FLUTTER_WEB_USE_SKIA=false --no-source-maps --dart2js-optimization O4
-
-      - name: Archive Web Release
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-release
-          path: build/web/
-
   build-linux-release:
     runs-on: ubuntu-latest
     steps:
@@ -179,7 +156,7 @@ jobs:
           path: build/ios/iphoneos/Runner.app
 
   create-release:
-    needs: [build-web-release, build-linux-release, build-windows-release, build-macos-release, build-android-release, build-ios-release]
+    needs: [build-linux-release, build-windows-release, build-macos-release, build-android-release, build-ios-release]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
@@ -191,7 +168,6 @@ jobs:
 
       - name: Package artifacts
         run: |
-          zip -r web-release.zip web-release
           zip -r linux-release.zip linux-release
           zip -r windows-release.zip windows-release
           zip -r macos-release.zip macos-release
@@ -208,16 +184,6 @@ jobs:
           release_name: Release v${{ github.run_number }}
           draft: false
           prerelease: false
-
-      - name: Upload Web Release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./web-release.zip
-          asset_name: meeting-note-web-release.zip
-          asset_content_type: application/zip
 
       - name: Upload Linux Release
         uses: actions/upload-release-asset@v1
