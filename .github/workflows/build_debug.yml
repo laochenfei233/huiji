@@ -85,6 +85,12 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Clean previous builds
+        run: flutter clean
+
+      - name: Re-install dependencies
+        run: flutter pub get
+
       - name: Build macOS Debug
         run: flutter build macos --debug
 
@@ -154,7 +160,7 @@ jobs:
         run: flutter pub get
 
       - name: Build iOS Debug
-        run: flutter build ios --debug --no-codesign
+        run: flutter build ios --debug --simulator --no-codesign
 
       - name: Archive iOS Debug
         uses: actions/upload-artifact@v4

@@ -85,6 +85,12 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Clean previous builds
+        run: flutter clean
+
+      - name: Re-install dependencies
+        run: flutter pub get
+
       - name: Build macOS Release
         run: flutter build macos --release
 
@@ -154,7 +160,7 @@ jobs:
         run: flutter pub get
 
       - name: Build iOS Release
-        run: flutter build ios --release --no-codesign
+        run: flutter build ios --release --simulator --no-codesign
 
       - name: Archive iOS Release
         uses: actions/upload-artifact@v4
