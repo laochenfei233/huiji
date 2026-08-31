@@ -3,14 +3,14 @@ import 'package:flutter/material.dart';
 /// Semi Design (bytedance) Design Tokens - https://semi.design
 ///
 /// Light/Dark values from semi-design DESIGN.md:
-/// - primary #0064FA / #54A9FF
+/// - primary #4A8FD7 / #77ABE1 (brand blue from assets/logo.png)
 /// - radius: small 3 / medium 6 / large 12
 /// - control height 32px, body 14px, label 12px
 /// - cards flat (bg-1 + 1px border), floating elements use elevated shadow
 abstract final class SemiColors {
   // Brand
-  static const primaryLight = Color(0xFF0064FA);
-  static const primaryDark = Color(0xFF54A9FF);
+  static const primaryLight = Color(0xFF4A8FD7);
+  static const primaryDark = Color(0xFF77ABE1);
   static const secondaryLight = Color(0xFF0095EE);
   static const secondaryDark = Color(0xFF40B4F3);
   static const successLight = Color(0xFF3BB346);
