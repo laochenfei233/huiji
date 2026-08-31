@@ -1,5 +1,5 @@
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
+import 'package:yanji/platform/io_adapter.dart';
+import 'package:yanji/platform/path_adapter.dart';
 import 'package:flutter/foundation.dart';
 
 class LoggingService {
@@ -13,8 +13,8 @@ class LoggingService {
 
   Future<void> init() async {
     try {
-      final directory = await getApplicationDocumentsDirectory();
-      _logFile = File('${directory.path}/app_logs.txt');
+      final docsPath = await getDocsPath();
+      _logFile = File('$docsPath/app_logs.txt');
       
       // 创建文件（如果不存在）
       if (!await _logFile!.exists()) {

@@ -32,7 +32,6 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
-build/
 
 # Symbolication related
 app.*.symbols
@@ -40,18 +39,25 @@ app.*.symbols
 # Obfuscation related
 app.*.map.json
 
+# Local tooling / build artifacts
+.mimocode/
+release_packages/
+android/build/
+package-lock.json
+
+# Generated platform files
+ios/Flutter/ephemeral/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/Runner/GeneratedPluginRegistrant.h
+ios/Runner/GeneratedPluginRegistrant.m
+macos/Flutter/ephemeral/
+macos/Flutter/GeneratedPluginRegistrant.swift
+linux/flutter/generated_plugin_registrant.cc
+linux/flutter/generated_plugin_registrant.h
+linux/flutter/generated_plugins.cmake
+
 # Android Studio will place build artifacts here
 /android/app/debug
 /android/app/profile
 /android/app/release
-
-node_modules/
-*.md_
-api_key_configuration
-as
-final
-package.json
-package-lock.json
-ws_proxy.js
-/*_report.md
-/*_fix.md

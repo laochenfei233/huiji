@@ -1,35 +1,24 @@
 {
   "asr_models": [
     {
-      "name": "百炼-FunASR Realtime",
-      "type": "websocket",
-      "url": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
-      "protocol": "",
-      "key": "",
-      "model_name": "fun-asr-realtime"
-    },
-    {
-      "name": "百炼-Qwen3 ASR Flash",
-      "type": "websocket",
-      "url": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
-      "protocol": "",
-      "key": "",
+      "name": "通义千问实时语音识别 - 官方推荐",
+      "url": "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+      "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
       "model_name": "qwen3-asr-flash-realtime"
     },
     {
-      "name": "通义千问语音识别",
-      "type": "http",
-      "url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "key": "",
-      "model_name": "qwen-audio-turbo"
+      "name": "通义千问实时语音识别 - 新加坡",
+      "url": "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime",
+      "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+      "model_name": "qwen3-asr-flash-realtime"
     }
   ],
   "summary_models": [
     {
       "name": "阿里云-Qwen-Plus",
-      "url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "key": "",
-      "model_name": "qwen3.5-plus"
+      "url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+      "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+      "model_name": "qwen-plus"
     }
   ]
 }

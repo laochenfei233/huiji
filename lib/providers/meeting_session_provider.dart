@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:yanji/models/meeting.dart';
 import 'package:yanji/models/meeting_session.dart';
 import 'package:yanji/services/storage_service.dart';
+import 'package:yanji/services/translation_service.dart';
 
 /// 会议会话事件类型
 enum SessionEventType {
@@ -46,12 +47,20 @@ class MeetingSessionProvider extends ChangeNotifier {
   // 事件流控制器
   final StreamController<SessionEvent> _eventController = StreamController.broadcast();
   
+  // 翻译状态
+  TranslationDisplayMode _displayMode = TranslationDisplayMode.original;
+  String _targetLanguage = 'en';
+  bool _translationEnabled = false;
+
   // 错误处理
   String? _lastError;
   bool _hasError = false;
 
   // Getters
   MeetingSession? get currentSession => _currentSession;
+  TranslationDisplayMode get displayMode => _displayMode;
+  String get targetLanguage => _targetLanguage;
+  bool get translationEnabled => _translationEnabled;
   List<MeetingSession> get sessions => List.unmodifiable(_sessions);
   Stream<SessionEvent> get events => _eventController.stream;
   String? get lastError => _lastError;
@@ -177,20 +186,53 @@ class MeetingSessionProvider extends ChangeNotifier {
       _handleError('没有活动会话');
       return;
     }
-    
+
     final oldTranscript = _currentSession!.originalTranscript;
     final updatedSession = _currentSession!.copyWith(
       originalTranscript: transcript,
       state: MeetingSessionState.transcription,
       updatedAt: DateTime.now(),
     );
-    
+
     await updateSession(updatedSession);
-    
+
     _emitEvent(SessionEventType.transcriptReceived, _currentSession!.id, {
       'oldTranscript': oldTranscript,
       'newTranscript': transcript,
     });
+  }
+
+  /// 更新翻译转录文本
+  Future<void> updateTranslatedTranscript(String translated) async {
+    if (_currentSession == null) {
+      _handleError('没有活动会话');
+      return;
+    }
+
+    final updatedSession = _currentSession!.copyWith(
+      translatedTranscript: translated,
+      updatedAt: DateTime.now(),
+    );
+
+    await updateSession(updatedSession);
+  }
+
+  /// 设置翻译显示模式
+  void setDisplayMode(TranslationDisplayMode mode) {
+    _displayMode = mode;
+    notifyListeners();
+  }
+
+  /// 设置目标翻译语言
+  void setTargetLanguage(String languageCode) {
+    _targetLanguage = languageCode;
+    notifyListeners();
+  }
+
+  /// 启用/禁用翻译
+  void setTranslationEnabled(bool enabled) {
+    _translationEnabled = enabled;
+    notifyListeners();
   }
 
   /// 更新总结文本

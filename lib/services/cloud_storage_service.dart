@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io';
+import 'package:yanji/platform/io_adapter.dart';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';

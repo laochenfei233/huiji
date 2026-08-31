@@ -8,6 +8,7 @@ class ConfigService {
   static const String _summaryModelsKey = 'summary_models';
   static const String _s3ConfigKey = 's3_config';
   static const String _webdavConfigKey = 'webdav_config';
+  static const String _translationConfigKey = 'translation_config';
   static const String _githubProxyKey = 'github_proxy';
 
   // Load GitHub proxy setting
@@ -238,5 +239,57 @@ class ConfigService {
     );
     final jsonString = json.encode(safeConfig.toJson());
     await prefs.setString(_webdavConfigKey, jsonString);
+  }
+
+  // ==================== Translation Config ====================
+
+  // Load translation configuration (API key loaded from secure storage)
+  static Future<TranslationConfig> loadTranslationConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonString = prefs.getString(_translationConfigKey);
+
+    TranslationConfig baseConfig = TranslationConfig();
+    if (jsonString != null && jsonString.isNotEmpty) {
+      try {
+        final jsonMap = json.decode(jsonString) as Map<String, dynamic>;
+        baseConfig = TranslationConfig.fromJson(jsonMap);
+      } catch (e) {
+        return TranslationConfig();
+      }
+    }
+
+    // 从安全存储加载 API Key 和 Secret
+    final apiKey = await SecureStorageService.loadTranslationApiKey();
+    final apiSecret = await SecureStorageService.loadTranslationApiSecret();
+
+    return TranslationConfig(
+      provider: baseConfig.provider,
+      apiKey: apiKey.isNotEmpty ? apiKey : baseConfig.apiKey,
+      apiSecret: apiSecret.isNotEmpty ? apiSecret : baseConfig.apiSecret,
+      baseUrl: baseConfig.baseUrl,
+      defaultTargetLanguage: baseConfig.defaultTargetLanguage,
+    );
+  }
+
+  // Save translation configuration (API key saved to secure storage)
+  static Future<void> saveTranslationConfig(TranslationConfig config) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // API Key 存入安全存储
+    if (config.apiKey.isNotEmpty) {
+      await SecureStorageService.saveTranslationApiKey(config.apiKey);
+    }
+    if (config.apiSecret.isNotEmpty) {
+      await SecureStorageService.saveTranslationApiSecret(config.apiSecret);
+    }
+
+    // 非敏感字段存入 SharedPreferences
+    final safeConfig = TranslationConfig(
+      provider: config.provider,
+      baseUrl: config.baseUrl,
+      defaultTargetLanguage: config.defaultTargetLanguage,
+    );
+    final jsonString = json.encode(safeConfig.toJson());
+    await prefs.setString(_translationConfigKey, jsonString);
   }
 }

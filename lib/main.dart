@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -34,11 +33,8 @@ void main() async {
   // 初始化日志服务
   await LoggingService().init();
 
-  // 请求通知权限（Android 13+ 需要）
-  await Permission.notification.request();
-
-  // iOS 通知权限
-  if (!kIsWeb && Platform.isIOS) {
+  // 请求通知权限（Android 13+ / iOS 需要）
+  if (!kIsWeb) {
     await Permission.notification.request();
   }
 

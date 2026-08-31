@@ -46,10 +46,13 @@ class ConfigLoader {
                 : WebDAVConfig(),
       );
       
+      final userTranslationConfig = await ConfigService.loadTranslationConfig();
+
       return AppConfig(
         asrModels: asrModels,
         llmModels: llmModels,
         storage: storage,
+        translation: userTranslationConfig,
         githubProxy: await ConfigService.loadGithubProxy(),
       );
     } catch (e) {
@@ -66,14 +69,16 @@ class AppConfig {
   final List<ASRModelConfig> asrModels;
   final List<LLMModelConfig> llmModels;
   final StorageConfig storage;
+  final TranslationConfig translation;
   final String? githubProxy; // GitHub 代理加速 URL
 
   AppConfig({
     required this.asrModels,
     required this.llmModels,
     required this.storage,
+    TranslationConfig? translation,
     this.githubProxy,
-  });
+  }) : translation = translation ?? TranslationConfig();
 
   // 向后兼容
   List<LLMModelConfig> get summaryModels => llmModels;
@@ -261,3 +266,101 @@ class LLMModelConfig {
 
 // 向后兼容
 typedef SummaryModelConfig = LLMModelConfig;
+
+/// 翻译服务提供商
+enum TranslationProviderType {
+  dashscope,   // 阿里云 DashScope
+  tencent,     // 腾讯云机器翻译
+  baidu,       // 百度机器翻译
+  netease,     // 网易有道翻译
+  openai,      // OpenAI 兼容接口（可用于任意 LLM 翻译）
+}
+
+/// 翻译提供商信息
+class TranslationProviderInfo {
+  final TranslationProviderType type;
+  final String name;
+  final String defaultBaseUrl;
+  final String description;
+
+  const TranslationProviderInfo({
+    required this.type,
+    required this.name,
+    required this.defaultBaseUrl,
+    required this.description,
+  });
+}
+
+const List<TranslationProviderInfo> kTranslationProviders = [
+  TranslationProviderInfo(
+    type: TranslationProviderType.dashscope,
+    name: 'DashScope (阿里云)',
+    defaultBaseUrl: 'https://dashscope.aliyuncs.com/api/v1/services/text-translation/text-translation',
+    description: '阿里云机器翻译，支持200+语种',
+  ),
+  TranslationProviderInfo(
+    type: TranslationProviderType.tencent,
+    name: '腾讯云机器翻译',
+    defaultBaseUrl: 'https://tmt.tencentcloudapi.com',
+    description: '腾讯云文本翻译，支持50+语种',
+  ),
+  TranslationProviderInfo(
+    type: TranslationProviderType.baidu,
+    name: '百度机器翻译',
+    defaultBaseUrl: 'https://fanyi-api.baidu.com/api/trans/vip/translate',
+    description: '百度通用翻译API，支持200+语种',
+  ),
+  TranslationProviderInfo(
+    type: TranslationProviderType.netease,
+    name: '网易有道翻译',
+    defaultBaseUrl: 'https://openapi.youdao.com/api',
+    description: '网易有道智云翻译，支持多种语种',
+  ),
+  TranslationProviderInfo(
+    type: TranslationProviderType.openai,
+    name: 'OpenAI 兼容接口',
+    defaultBaseUrl: 'https://api.openai.com/v1',
+    description: '使用LLM进行翻译，可对接任意兼容接口',
+  ),
+];
+
+class TranslationConfig {
+  final TranslationProviderType provider;
+  final String apiKey;
+  final String apiSecret;  // 百度/网易需要 secret key
+  final String baseUrl;
+  final String defaultTargetLanguage;
+
+  TranslationConfig({
+    this.provider = TranslationProviderType.dashscope,
+    this.apiKey = '',
+    this.apiSecret = '',
+    String? baseUrl,
+    this.defaultTargetLanguage = 'en',
+  }) : baseUrl = baseUrl ?? kTranslationProviders.firstWhere((p) => p.type == provider).defaultBaseUrl;
+
+  bool get isConfigured => apiKey.isNotEmpty;
+
+  factory TranslationConfig.fromJson(Map<String, dynamic> json) {
+    final providerStr = json['provider'] as String? ?? 'dashscope';
+    final provider = TranslationProviderType.values.firstWhere(
+      (p) => p.name == providerStr,
+      orElse: () => TranslationProviderType.dashscope,
+    );
+    return TranslationConfig(
+      provider: provider,
+      apiKey: json['api_key'] ?? '',
+      apiSecret: json['api_secret'] ?? '',
+      baseUrl: json['base_url'],
+      defaultTargetLanguage: json['default_target_language'] ?? 'en',
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'provider': provider.name,
+    'api_key': apiKey,
+    'api_secret': apiSecret,
+    'base_url': baseUrl,
+    'default_target_language': defaultTargetLanguage,
+  };
+}

@@ -222,4 +222,4 @@ MIT License
 ## 联系方式
 
 - GitHub: [@laochenfei233](https://github.com/laochenfei233)
-- 项目地址: [https://github.com/laochenfei233/meeting_note](https://github.com/laochenfei233/meeting_note)
+- 项目地址: [https://github.com/laochenfei233/huiji](https://github.com/laochenfei233/huiji)

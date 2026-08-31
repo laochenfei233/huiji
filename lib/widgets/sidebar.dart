@@ -53,10 +53,10 @@ class Sidebar extends StatelessWidget {
             selected: currentIndex == 1,
             onTap: () => onItemTapped(1),
           ),
-          // 系统检测工具
+          // 添加音频测试菜单项
           ListTile(
-            leading: const Icon(Icons.build),
-            title: const Text('系统检测'),
+            leading: const Icon(Icons.hearing),
+            title: const Text('音频测试'),
             selected: currentIndex == 2,
             onTap: () => onItemTapped(2),
           ),

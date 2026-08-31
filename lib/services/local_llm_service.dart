@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 
 import 'local_llm_service_native.dart'
     if (dart.library.html) 'local_llm_service_web.dart';

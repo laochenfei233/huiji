@@ -3,9 +3,8 @@ import 'package:provider/provider.dart';
 import 'package:yanji/models/meeting_session.dart' as session;
 import 'package:yanji/providers/meeting_session_provider.dart';
 import 'package:yanji/utils/config_loader.dart';
+import 'package:yanji/utils/theme_utils.dart';
 import 'package:yanji/models/meeting.dart';
-import 'package:yanji/models/template.dart';
-import 'package:yanji/services/template_service.dart';
 
 class MeetingSetupScreen extends StatefulWidget {
   const MeetingSetupScreen({super.key});
@@ -27,12 +26,7 @@ class _MeetingSetupScreenState extends State<MeetingSetupScreen> {
   String _selectedAsrModel = '';
   String _selectedSummaryModel = '';
   List<ASRModelConfig> _asrModels = [];
-  List<LLMModelConfig> _llmModels = [];
-
-  // 模板选择
-  final TemplateService _templateService = TemplateService();
-  List<Template> _templates = [];
-  String? _selectedTemplateId;
+  List<SummaryModelConfig> _summaryModels = [];
 
   @override
   void initState() {
@@ -42,22 +36,16 @@ class _MeetingSetupScreenState extends State<MeetingSetupScreen> {
 
   Future<void> _loadConfig() async {
     final config = await ConfigLoader.loadConfig();
-    final templates = await _templateService.getAllTemplates();
     setState(() {
       _asrModels = config.asrModels;
-      _llmModels = config.llmModels;
-      _templates = templates;
-
+      _summaryModels = config.summaryModels;
+      
       // 默认选择第一个模型
       if (_asrModels.isNotEmpty) {
         _selectedAsrModel = _asrModels.first.name;
       }
-      if (_llmModels.isNotEmpty) {
-        _selectedSummaryModel = _llmModels.first.name;
-      }
-      // 默认选择第一个模板
-      if (_templates.isNotEmpty) {
-        _selectedTemplateId = _templates.first.id;
+      if (_summaryModels.isNotEmpty) {
+        _selectedSummaryModel = _summaryModels.first.name;
       }
     });
   }
@@ -106,6 +94,7 @@ class _MeetingSetupScreenState extends State<MeetingSetupScreen> {
   }
 
   Widget _buildSetupForm() {
+    final warningColor = ThemeUtils.warning(context);
     return Form(
       key: _formKey,
       child: SingleChildScrollView(
@@ -153,49 +142,24 @@ class _MeetingSetupScreenState extends State<MeetingSetupScreen> {
               ),
             ),
             const SizedBox(height: 32),
-
-            // 模板选择
-            _buildSectionTitle('纪要模板'),
-            const SizedBox(height: 16),
-            if (_templates.isEmpty)
-              const Text('暂无可用模板', style: TextStyle(color: Colors.grey))
-            else
-              DropdownButton<String>(
-                value: _selectedTemplateId,
-                isExpanded: true,
-                items: _templates.map((template) {
-                  return DropdownMenuItem(
-                    value: template.id,
-                    child: Text(template.name),
-                  );
-                }).toList(),
-                onChanged: (String? newValue) {
-                  if (newValue != null) {
-                    setState(() {
-                      _selectedTemplateId = newValue;
-                    });
-                  }
-                },
-              ),
-            const SizedBox(height: 32),
-
+            
             // 模型选择
             _buildSectionTitle('模型配置'),
             const SizedBox(height: 16),
             
             if (_asrModels.isEmpty)
               Card(
-                color: Colors.orange.shade50,
+                color: warningColor.withValues(alpha: 0.10),
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
-                      Icon(Icons.warning, color: Colors.orange.shade700),
+                      Icon(Icons.warning, color: warningColor),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           '未找到ASR模型配置，请先在设置中配置',
-                          style: TextStyle(color: Colors.orange.shade800),
+                          style: TextStyle(color: warningColor),
                         ),
                       ),
                     ],
@@ -210,19 +174,19 @@ class _MeetingSetupScreenState extends State<MeetingSetupScreen> {
               }),
             const SizedBox(height: 16),
             
-            if (_llmModels.isEmpty)
+            if (_summaryModels.isEmpty)
               Card(
-                color: Colors.orange.shade50,
+                color: warningColor.withValues(alpha: 0.10),
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
-                      Icon(Icons.warning, color: Colors.orange.shade700),
+                      Icon(Icons.warning, color: warningColor),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           '未找到总结模型配置，请先在设置中配置',
-                          style: TextStyle(color: Colors.orange.shade800),
+                          style: TextStyle(color: warningColor),
                         ),
                       ),
                     ],
@@ -230,7 +194,7 @@ class _MeetingSetupScreenState extends State<MeetingSetupScreen> {
                 ),
               )
             else
-              _buildModelSelector('总结模型', _llmModels, _selectedSummaryModel, (value) {
+              _buildModelSelector('总结模型', _summaryModels, _selectedSummaryModel, (value) {
                 setState(() {
                   _selectedSummaryModel = value!;
                 });
@@ -287,12 +251,12 @@ class _MeetingSetupScreenState extends State<MeetingSetupScreen> {
         String name;
         if (model is ASRModelConfig) {
           name = model.name;
-        } else if (model is LLMModelConfig) {
+        } else if (model is SummaryModelConfig) {
           name = model.name;
         } else {
           name = model.toString();
         }
-
+        
         return DropdownMenuItem<String>(
           value: name,
           child: Text(name),
@@ -375,7 +339,7 @@ class _MeetingSetupScreenState extends State<MeetingSetupScreen> {
   bool _canContinue() {
     return _titleController.text.trim().isNotEmpty &&
            _asrModels.isNotEmpty &&
-           _llmModels.isNotEmpty;
+           _summaryModels.isNotEmpty;
   }
 
   void _startRecording() async {
@@ -414,7 +378,6 @@ class _MeetingSetupScreenState extends State<MeetingSetupScreen> {
       description: _descriptionController.text.trim(),
       asrModelName: _selectedAsrModel,
       summaryModelName: _selectedSummaryModel,
-      templateId: _selectedTemplateId,
     );
     await provider.updateParticipants(participants);
     await provider.updateSessionState(session.MeetingSessionState.recording);

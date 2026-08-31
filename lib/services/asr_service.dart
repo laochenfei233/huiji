@@ -1,17 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'package:yanji/platform/io_adapter.dart';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+import 'package:yanji/platform/path_adapter.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:yanji/utils/config_loader.dart';
 import 'package:yanji/models/ai_model.dart';
-import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
+import 'package:yanji/services/sherpa_adapter.dart' as sherpa_onnx;
 
 /// ASR 识别状态
 enum AsrStatus {
@@ -554,8 +554,8 @@ class SherpaOnnxAsrService extends AsrService with AsrServiceMixin {
         // 从 assets 提取到临时目录
         try {
           final data = await rootBundle.load('assets/silero_vad.onnx');
-          final tempDir = await getTemporaryDirectory();
-          final tempFile = File('${tempDir.path}/silero_vad.onnx');
+          final tempPath = await getTempPath();
+          final tempFile = File('$tempPath/silero_vad.onnx');
           await tempFile.writeAsBytes(
             data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
           );
@@ -657,8 +657,8 @@ class SherpaOnnxAsrService extends AsrService with AsrServiceMixin {
       String hotwordsPath = '';
       try {
         final hotwordsData = await rootBundle.load('assets/hotwords.txt');
-        final tempDir = await getTemporaryDirectory();
-        final hotwordsFile = File('${tempDir.path}/hotwords.txt');
+        final tempPath = await getTempPath();
+        final hotwordsFile = File('$tempPath/hotwords.txt');
         await hotwordsFile.writeAsBytes(
           hotwordsData.buffer.asUint8List(hotwordsData.offsetInBytes, hotwordsData.lengthInBytes),
         );

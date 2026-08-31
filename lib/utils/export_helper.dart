@@ -1,8 +1,10 @@
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:yanji/platform/io_adapter.dart';
+import 'package:yanji/platform/path_adapter.dart';
+import 'package:yanji/utils/web_file_adapter.dart' as web_file;
 
 class ExportHelper {
   /// 复制文本到剪贴板
@@ -21,22 +23,52 @@ class ExportHelper {
     required String title,
     required String summary,
     String? transcript,
+    String? translatedTranscript,
   }) async {
     final buffer = StringBuffer();
     buffer.writeln('# $title\n');
     buffer.writeln(summary);
     if (transcript != null && transcript.isNotEmpty) {
       buffer.writeln('\n---\n');
-      buffer.writeln('## 会议原文\n');
-      buffer.writeln(transcript);
+      if (translatedTranscript != null && translatedTranscript.isNotEmpty) {
+        // 双语转录
+        buffer.writeln('## 会议转录（双语对照）\n');
+        buffer.writeln('### 原文\n');
+        buffer.writeln(transcript);
+        buffer.writeln('\n### 译文\n');
+        buffer.writeln(translatedTranscript);
+      } else {
+        buffer.writeln('## 会议原文\n');
+        buffer.writeln(transcript);
+      }
     }
 
-    final dir = await getApplicationDocumentsDirectory();
     final safeName = title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    final file = File('${dir.path}/$safeName.md');
-    await file.writeAsString(buffer.toString());
+    final content = buffer.toString();
 
-    await Share.shareXFiles([XFile(file.path)], text: '会议纪要: $title');
+    if (kIsWeb) {
+      await web_file.downloadFile(content, '$safeName.md', mimeType: 'text/markdown');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('文件已开始下载')),
+        );
+      }
+      return;
+    }
+
+    final docsPath = await getDocsPath();
+    final file = File('$docsPath/$safeName.md');
+    await file.writeAsString(content);
+    try {
+      await Share.shareXFiles([XFile(file.path)], text: '会议纪要: $title');
+    } catch (_) {
+      // Windows 等平台分享面板不可用时忽略，文件已保存
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已导出到 ${file.path}')),
+      );
+    }
   }
 
   /// 导出 Word 文档（HTML 格式，Word 可直接打开）
@@ -45,25 +77,56 @@ class ExportHelper {
     required String title,
     required String summary,
     String? transcript,
+    String? translatedTranscript,
   }) async {
-    final html = _buildHtml(title, summary, transcript);
-
-    final dir = await getApplicationDocumentsDirectory();
+    final content = _buildHtml(title, summary, transcript, translatedTranscript);
     final safeName = title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    final file = File('${dir.path}/$safeName.doc');
-    await file.writeAsString(html);
 
-    await Share.shareXFiles([XFile(file.path)], text: '会议纪要: $title');
+    if (kIsWeb) {
+      await web_file.downloadFile(content, '$safeName.doc', mimeType: 'application/msword');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('文件已开始下载')),
+        );
+      }
+      return;
+    }
+
+    final docsPath = await getDocsPath();
+    final file = File('$docsPath/$safeName.doc');
+    await file.writeAsString(content);
+    try {
+      await Share.shareXFiles([XFile(file.path)], text: '会议纪要: $title');
+    } catch (_) {
+      // Windows 等平台分享面板不可用时忽略，文件已保存
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已导出到 ${file.path}')),
+      );
+    }
   }
 
-  static String _buildHtml(String title, String summary, String? transcript) {
+  static String _buildHtml(String title, String summary, String? transcript, String? translatedTranscript) {
     final summaryHtml = _markdownToHtml(summary);
-    final transcriptHtml = transcript != null && transcript.isNotEmpty
-        ? '''
+    String transcriptHtml = '';
+    if (transcript != null && transcript.isNotEmpty) {
+      if (translatedTranscript != null && translatedTranscript.isNotEmpty) {
+        // 双语转录
+        transcriptHtml = '''
+<h2>会议转录（双语对照）</h2>
+<h3>原文</h3>
+<div style="background:#f5f5f5;padding:16px;border-radius:8px;font-size:13px;line-height:1.8;white-space:pre-wrap;">${_escapeHtml(transcript)}</div>
+<h3>译文</h3>
+<div style="background:#e8f4fd;padding:16px;border-radius:8px;font-size:13px;line-height:1.8;white-space:pre-wrap;">${_escapeHtml(translatedTranscript)}</div>
+''';
+      } else {
+        transcriptHtml = '''
 <h2>会议原文</h2>
 <div style="background:#f5f5f5;padding:16px;border-radius:8px;font-size:13px;line-height:1.8;white-space:pre-wrap;">${_escapeHtml(transcript)}</div>
-'''
-        : '';
+''';
+      }
+    }
 
     return '''
 <!DOCTYPE html>
@@ -99,7 +162,6 @@ $transcriptHtml
   static String _markdownToHtml(String md) {
     var html = _escapeHtml(md);
 
-    // 标题
     html = html.replaceAllMapped(RegExp(r'^### (.+)$', multiLine: true),
         (m) => '<h3>${m.group(1)}</h3>');
     html = html.replaceAllMapped(RegExp(r'^## (.+)$', multiLine: true),
@@ -107,17 +169,14 @@ $transcriptHtml
     html = html.replaceAllMapped(RegExp(r'^# (.+)$', multiLine: true),
         (m) => '<h1>${m.group(1)}</h1>');
 
-    // 粗体和斜体
     html = html.replaceAllMapped(RegExp(r'\*\*(.+?)\*\*'),
         (m) => '<strong>${m.group(1)}</strong>');
     html = html.replaceAllMapped(RegExp(r'\*(.+?)\*'),
         (m) => '<em>${m.group(1)}</em>');
 
-    // 行内代码
     html = html.replaceAllMapped(RegExp(r'`(.+?)`'),
         (m) => '<code>${m.group(1)}</code>');
 
-    // 无序列表
     html = html.replaceAllMapped(
       RegExp(r'^- (.+)$', multiLine: true),
       (m) => '<li>${m.group(1)}</li>',
@@ -127,14 +186,11 @@ $transcriptHtml
       (m) => '<ul>${m.group(0)}</ul>',
     );
 
-    // 引用
     html = html.replaceAllMapped(RegExp(r'^&gt; (.+)$', multiLine: true),
         (m) => '<blockquote>${m.group(1)}</blockquote>');
 
-    // 分割线
     html = html.replaceAll('---', '<hr>');
 
-    // 段落（连续换行变 <br>）
     html = html.replaceAll('\n\n', '</p><p>');
     html = '<p>$html</p>';
     html = html.replaceAll('<p></p>', '');
@@ -156,6 +212,7 @@ $transcriptHtml
     required String title,
     required String summary,
     String? transcript,
+    String? translatedTranscript,
   }) async {
     showModalBottomSheet(
       context: context,
@@ -172,18 +229,27 @@ $transcriptHtml
             ),
             ListTile(
               leading: const Icon(Icons.copy),
-              title: const Text('复制到剪贴板'),
+              title: const Text('复制会议纪要'),
               onTap: () {
                 Navigator.pop(ctx);
                 copyToClipboard(context, summary);
               },
             ),
+            if (transcript != null && transcript.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.copy_all),
+                title: const Text('复制会议原文'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  copyToClipboard(context, transcript);
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.description),
               title: const Text('导出 Markdown (.md)'),
               onTap: () {
                 Navigator.pop(ctx);
-                exportMarkdown(context, title: title, summary: summary, transcript: transcript);
+                exportMarkdown(context, title: title, summary: summary, transcript: transcript, translatedTranscript: translatedTranscript);
               },
             ),
             ListTile(
@@ -191,7 +257,7 @@ $transcriptHtml
               title: const Text('导出 Word (.doc)'),
               onTap: () {
                 Navigator.pop(ctx);
-                exportWord(context, title: title, summary: summary, transcript: transcript);
+                exportWord(context, title: title, summary: summary, transcript: transcript, translatedTranscript: translatedTranscript);
               },
             ),
             const SizedBox(height: 8),

@@ -18,6 +18,7 @@ class MeetingSession {
   final String asrModelName;
   final String summaryModelName;
   final String originalTranscript;
+  final String translatedTranscript;
   final String? summaryText;
   final int recordingDuration;
   final DateTime createdAt;
@@ -33,6 +34,7 @@ class MeetingSession {
     this.asrModelName = '',
     this.summaryModelName = '',
     this.originalTranscript = '',
+    this.translatedTranscript = '',
     this.summaryText,
     this.recordingDuration = 0,
     required this.createdAt,
@@ -63,6 +65,7 @@ class MeetingSession {
       'asrModelName': asrModelName,
       'summaryModelName': summaryModelName,
       'originalTranscript': originalTranscript,
+      'translatedTranscript': translatedTranscript,
       'summaryText': summaryText,
       'recordingDuration': recordingDuration,
       'createdAt': createdAt.toIso8601String(),
@@ -84,6 +87,7 @@ class MeetingSession {
       asrModelName: json['asrModelName'] as String? ?? '',
       summaryModelName: json['summaryModelName'] as String? ?? '',
       originalTranscript: json['originalTranscript'] as String? ?? '',
+      translatedTranscript: json['translatedTranscript'] as String? ?? '',
       summaryText: json['summaryText'] as String?,
       recordingDuration: json['recordingDuration'] as int? ?? 0,
       createdAt: DateTime.parse(json['createdAt'] as String),
@@ -102,6 +106,7 @@ class MeetingSession {
     String? asrModelName,
     String? summaryModelName,
     String? originalTranscript,
+    String? translatedTranscript,
     String? summaryText,
     int? recordingDuration,
     DateTime? createdAt,
@@ -117,6 +122,7 @@ class MeetingSession {
       asrModelName: asrModelName ?? this.asrModelName,
       summaryModelName: summaryModelName ?? this.summaryModelName,
       originalTranscript: originalTranscript ?? this.originalTranscript,
+      translatedTranscript: translatedTranscript ?? this.translatedTranscript,
       summaryText: summaryText ?? this.summaryText,
       recordingDuration: recordingDuration ?? this.recordingDuration,
       createdAt: createdAt ?? this.createdAt,

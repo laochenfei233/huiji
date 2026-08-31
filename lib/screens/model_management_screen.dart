@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:yanji/models/ai_model.dart';
 import 'package:yanji/services/model_download_service.dart';
@@ -120,6 +121,23 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (kIsWeb) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('模型管理')),
+        body: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.cloud_off, size: 64, color: Colors.grey),
+              SizedBox(height: 16),
+              Text('网页端暂不支持本地模型管理', style: TextStyle(fontSize: 16, color: Colors.grey)),
+              SizedBox(height: 8),
+              Text('请使用桌面端或移动端管理本地 ASR 模型', style: TextStyle(color: Colors.grey)),
+            ],
+          ),
+        ),
+      );
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('模型管理')),
       body: _isLoading

@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'dart:io' show Platform;
+import 'package:yanji/platform/platform_adapter.dart' show Platform;
 import 'package:yanji/models/ai_model.dart';
 import 'package:yanji/services/llm_model_download_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -134,15 +134,29 @@ class _LlmModelManagementScreenState extends State<LlmModelManagementScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (kIsWeb) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('LLM 模型管理')),
+        body: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.cloud_off, size: 64, color: Colors.grey),
+              SizedBox(height: 16),
+              Text('网页端暂不支持本地 LLM 模型', style: TextStyle(fontSize: 16, color: Colors.grey)),
+              SizedBox(height: 8),
+              Text('请使用桌面端或移动端管理本地 LLM 模型', style: TextStyle(color: Colors.grey)),
+            ],
+          ),
+        ),
+      );
+    }
     return Scaffold(
-      appBar: AppBar(title: const Text('本地 LLM 模型管理')),
+      appBar: AppBar(title: const Text('LLM 模型管理')),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
-              onRefresh: () async {
-                await _loadModels();
-                await _loadCurrentModel();
-              },
+              onRefresh: _loadModels,
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [

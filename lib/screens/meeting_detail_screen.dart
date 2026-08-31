@@ -453,7 +453,13 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                                     ),
                                     const Spacer(),
-                                    if (_summary.isNotEmpty)
+                                    if (_summary.isNotEmpty) ...[
+                                      IconButton(
+                                        icon: const Icon(Icons.copy, size: 20),
+                                        onPressed: () =>
+                                            ExportHelper.copyToClipboard(context, _summary),
+                                        tooltip: '复制纪要',
+                                      ),
                                       IconButton(
                                         icon: const Icon(Icons.download, size: 20),
                                         onPressed: () => ExportHelper.showExportMenu(
@@ -464,6 +470,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                                         ),
                                         tooltip: '导出纪要',
                                       ),
+                                    ],
                                   ],
                                 ),
                                 const SizedBox(height: 16),
@@ -534,7 +541,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                                       padding: const EdgeInsets.all(8.0),
                                       child: _summary.isEmpty
                                           ? const Text('点击"生成纪要"按钮生成会议纪要', style: TextStyle(color: Colors.grey))
-                                          : MarkdownBody(data: _summary),
+                                          : MarkdownBody(data: _summary, selectable: true),
                                     ),
                                   ),
                                 ),
@@ -571,6 +578,14 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                                   '会议原文',
                                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                                 ),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.copy, size: 20),
+                                  tooltip: '复制会议原文',
+                                  onPressed: () => ExportHelper.copyToClipboard(
+                                    context,
+                                    _meeting!.transcript ?? '',
+                                  ),
+                                ),
                                 onTap: () {
                                   setState(() {
                                     _isTranscriptExpanded = !_isTranscriptExpanded;
@@ -587,7 +602,7 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                                   ),
                                   child: SingleChildScrollView(
                                     padding: const EdgeInsets.all(12),
-                                    child: Text(
+                                    child: SelectableText(
                                       _meeting!.transcript ?? '',
                                       style: const TextStyle(fontSize: 14, height: 1.6),
                                     ),
@@ -843,15 +858,17 @@ class _QADialogState extends State<_QADialog> {
         ),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: isUser ? Colors.blue.shade50 : Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(16),
+          color: isUser
+              ? Theme.of(context).colorScheme.primaryContainer
+              : Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
         ),
         child: isUser
             ? Text(msg.message)
             : MarkdownBody(
                 data: msg.message,
                 styleSheet: MarkdownStyleSheet(
-                  p: TextStyle(fontSize: 14, color: Colors.grey.shade800),
+                  p: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurface),
                 ),
               ),
       ),
@@ -865,8 +882,8 @@ class _QADialogState extends State<_QADialog> {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(16),
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -874,10 +891,13 @@ class _QADialogState extends State<_QADialog> {
             SizedBox(
               width: 16,
               height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.grey.shade400),
+              child: CircularProgressIndicator(strokeWidth: 2),
             ),
             const SizedBox(width: 8),
-            Text('思考中...', style: TextStyle(color: Colors.grey.shade500)),
+            Text(
+              '思考中...',
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
           ],
         ),
       ),

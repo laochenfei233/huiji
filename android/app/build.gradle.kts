@@ -8,6 +8,7 @@ plugins {
 android {
     namespace = "com.xyern.yanji"
     compileSdk = flutter.compileSdkVersion
+    buildToolsVersion = "36.1.0"
     ndkVersion = "28.2.13676358"
 
     compileOptions {
@@ -16,8 +17,10 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+        }
     }
 
     defaultConfig {

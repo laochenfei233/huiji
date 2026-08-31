@@ -1,7 +1,6 @@
-import 'dart:convert';
-import 'dart:io';
+import 'package:yanji/platform/io_adapter.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
-import 'package:path_provider/path_provider.dart';
+import 'package:yanji/platform/path_adapter.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:yanji/models/meeting.dart';
@@ -16,8 +15,8 @@ class DataMigrationService {
     if (kIsWeb || _migrationCompleted) return;
 
     try {
-      final directory = await getApplicationDocumentsDirectory();
-      final dbPath = join(directory.path, 'meetings.db');
+      final docsPath = await getDocsPath();
+      final dbPath = join(docsPath, 'meetings.db');
 
       if (!await File(dbPath).exists()) return;
 
@@ -118,63 +117,9 @@ class DataMigrationService {
     }
   }
 
-  /// 删除旧列（SQLite 不支持 DROP COLUMN，需要重建表）
-  static Future<void> _dropOldColumns() async {
-    try {
-      final directory = await getApplicationDocumentsDirectory();
-      final dbPath = join(directory.path, 'meetings.db');
-
-      final db = await openDatabase(dbPath);
-
-      // 检查是否有旧列
-      final columns = await db.rawQuery('PRAGMA table_info(meetings)');
-      final hasTranscript = columns.any((c) => c['name'] == 'transcript');
-      final hasSummary = columns.any((c) => c['name'] == 'summary');
-
-      if (!hasTranscript && !hasSummary) {
-        await db.close();
-        return;
-      }
-
-      debugPrint('[Migration] 清理旧列...');
-
-      // 重建表（保留新结构的列）
-      await db.transaction((txn) async {
-        // 创建新表
-        await txn.execute('''
-          CREATE TABLE meetings_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT,
-            date TEXT,
-            folderName TEXT,
-            participants TEXT,
-            recordingDuration INTEGER DEFAULT 0
-          )
-        ''');
-
-        // 复制数据
-        await txn.execute('''
-          INSERT INTO meetings_new (id, title, date, folderName, participants, recordingDuration)
-          SELECT id, title, date, folderName, participants, recordingDuration FROM meetings
-        ''');
-
-        // 删除旧表
-        await txn.execute('DROP TABLE meetings');
-
-        // 重命名新表
-        await txn.execute('ALTER TABLE meetings_new RENAME TO meetings');
-      });
-
-      await db.close();
-      debugPrint('[Migration] 旧列清理完成');
-    } catch (e) {
-      debugPrint('[Migration] 清理旧列失败: $e');
-    }
-  }
-
   static Future<Directory> _getMeetingsRoot() async {
-    final docs = await getApplicationDocumentsDirectory();
-    final root = Directory(join(docs.path, 'meetings'));
+    final docsPath = await getDocsPath();
+    final root = Directory(join(docsPath, 'meetings'));
     if (!await root.exists()) {
       await root.create(recursive: true);
     }

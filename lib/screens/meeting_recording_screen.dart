@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:yanji/platform/io_adapter.dart';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:yanji/services/wakelock_adapter.dart';
 import 'package:yanji/models/meeting_session.dart';
 import 'package:yanji/providers/meeting_session_provider.dart';
 import 'package:yanji/services/audio_recorder_service.dart';
@@ -12,8 +12,10 @@ import 'package:yanji/services/asr_service.dart';
 import 'package:yanji/services/llm_service.dart';
 import 'package:yanji/services/storage_service.dart';
 import 'package:yanji/services/recording_notification_service.dart';
+import 'package:yanji/services/translation_service.dart';
 import 'package:yanji/screens/settings_screen.dart';
 import 'package:yanji/utils/config_loader.dart';
+import 'package:yanji/utils/theme_utils.dart';
 
 class MeetingRecordingScreen extends StatefulWidget {
   const MeetingRecordingScreen({super.key});
@@ -45,6 +47,11 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
   StreamSubscription<AsrResult>? _asrSubscription;
   StreamSubscription<AsrStatus>? _asrStatusSubscription;
 
+  // 翻译相关状态
+  TranslationService? _translationService;
+  String _translatedText = '';
+  bool _isTranslating = false;
+
   @override
   void initState() {
     super.initState();
@@ -64,6 +71,7 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
     _audioDataSubscription?.cancel();
     _audioRecorder?.dispose();
     _asrService?.dispose();
+    _translationService?.clearCache();
     // 确保退出时关闭 wakelock
     WakelockPlus.disable();
     super.dispose();
@@ -159,6 +167,17 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
       );
       debugPrint('[Recording] ASR transcriptionStream 订阅已建立, asrService=${_asrService.runtimeType}');
 
+      // 初始化翻译服务
+      debugPrint('[Recording] 翻译配置检查: isConfigured=${config.translation.isConfigured}, provider=${config.translation.provider.name}, apiKey=${config.translation.apiKey.isNotEmpty ? "已配置" : "未配置"}');
+      if (config.translation.isConfigured) {
+        _translationService = TranslationService(config: config.translation);
+        _provider.setTargetLanguage(config.translation.defaultTargetLanguage);
+        _provider.setTranslationEnabled(true);
+        debugPrint('[Recording] 翻译服务已初始化 (${config.translation.provider.name}), 目标语言: ${config.translation.defaultTargetLanguage}');
+      } else {
+        debugPrint('[Recording] 翻译服务未配置，跳过初始化');
+      }
+
       if (mounted) {
         setState(() => _isInitialized = true);
       }
@@ -193,6 +212,13 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
         }
         _lastPartial = '';
         _currentTranscription = '';
+
+        // 触发翻译（异步）
+        debugPrint('[Recording] translationEnabled=${_provider.translationEnabled}, service=${_translationService != null}');
+        if (_provider.translationEnabled && _translationService != null) {
+          debugPrint('[Recording] 触发翻译...');
+          _translateAsync(result.text, result.speaker);
+        }
       } else {
         // 移除上一次的 partial，追加新的 partial
         if (_lastPartial.isNotEmpty && _transcriptText.endsWith(_lastPartial)) {
@@ -215,6 +241,58 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
         transcript: _transcriptText,
       );
     }
+  }
+
+  Future<void> _translateAsync(String text, String? speaker) async {
+    debugPrint('[Recording] _translateAsync 被调用: text="${text.substring(0, text.length > 50 ? 50 : text.length)}...", service=${_translationService != null}');
+    if (_translationService == null || text.trim().isEmpty) return;
+
+    final sourceLang = _detectSourceLanguage(text);
+    final targetLang = _provider.targetLanguage;
+    debugPrint('[Recording] 翻译: $sourceLang -> $targetLang');
+
+    if (sourceLang == targetLang) {
+      debugPrint('[Recording] 源语言==目标语言，跳过翻译');
+      return;
+    }
+
+    try {
+      setState(() => _isTranslating = true);
+
+      final prefix = speaker != null ? '[$speaker] ' : '';
+      debugPrint('[Recording] 调用翻译 API (${_translationService!.provider.name})...');
+      final translated = await _translationService!.translate(
+        text: text,
+        sourceLanguage: sourceLang,
+        targetLanguage: targetLang,
+      );
+      debugPrint('[Recording] 翻译结果: "${translated.substring(0, translated.length > 50 ? 50 : translated.length)}..."');
+
+      if (mounted) {
+        setState(() {
+          _translatedText = '$_translatedText$prefix$translated';
+          _isTranslating = false;
+        });
+        _provider.updateTranslatedTranscript(_translatedText);
+      }
+    } catch (e) {
+      debugPrint('[Recording] 翻译失败: $e');
+      if (mounted) {
+        setState(() => _isTranslating = false);
+      }
+    }
+  }
+
+  /// 简单的语言检测：根据字符范围判断
+  String _detectSourceLanguage(String text) {
+    // 检查是否包含 CJK 字符（中文）
+    if (RegExp(r'[\u4e00-\u9fff]').hasMatch(text)) return 'zh';
+    // 检查是否包含日文假名
+    if (RegExp(r'[\u3040-\u309f\u30a0-\u30ff]').hasMatch(text)) return 'ja';
+    // 检查是否包含韩文
+    if (RegExp(r'[\uac00-\ud7af]').hasMatch(text)) return 'ko';
+    // 默认英文
+    return 'en';
   }
 
   Future<void> _processAudioDataHttp() async {
@@ -245,6 +323,21 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
     if (_audioRecorder == null || _asrService == null) {
       _showError('服务未初始化');
       return;
+    }
+
+    // 重新加载翻译配置（用户可能在设置中配置了 API Key）
+    if (_translationService == null) {
+      try {
+        final config = await ConfigLoader.loadConfig();
+        if (config.translation.isConfigured) {
+          _translationService = TranslationService(config: config.translation);
+          _provider.setTargetLanguage(config.translation.defaultTargetLanguage);
+          _provider.setTranslationEnabled(true);
+          debugPrint('[Recording] 录音开始时初始化翻译服务 (${config.translation.provider.name})');
+        }
+      } catch (e) {
+        debugPrint('[Recording] 加载翻译配置失败: $e');
+      }
     }
 
     // 检查 API Key 是否已配置（local_funasr/local_funasr_onnx 不需要 key）
@@ -542,12 +635,66 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
               ),
               if (!_isRecording) ...[
                 const SizedBox(width: 4),
-                Icon(Icons.edit, size: 16, color: Colors.grey.shade400),
+                Icon(
+                  Icons.edit,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ],
             ],
           ),
         ),
         actions: [
+          // 翻译显示模式切换
+          if (_translationService != null)
+            IconButton(
+              icon: Icon(
+                _provider.displayMode == TranslationDisplayMode.bilingual
+                    ? Icons.translate
+                    : _provider.displayMode == TranslationDisplayMode.translated
+                        ? Icons.g_translate
+                        : Icons.language,
+                size: 20,
+              ),
+              onPressed: _toggleDisplayMode,
+              tooltip: _provider.displayMode == TranslationDisplayMode.original
+                  ? '切换到译文'
+                  : _provider.displayMode == TranslationDisplayMode.translated
+                      ? '切换到双语'
+                      : '切换到原文',
+            ),
+          // 翻译语言选择
+          if (_translationService != null && _provider.translationEnabled)
+            PopupMenuButton<String>(
+              icon: Chip(
+                label: Text(
+                  _getLanguageName(_provider.targetLanguage),
+                  style: const TextStyle(fontSize: 11),
+                ),
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+              ),
+              tooltip: '选择翻译目标语言',
+              onSelected: _switchTranslationLanguage,
+              itemBuilder: (context) {
+                return kSupportedLanguages.map((lang) {
+                  final isSelected = lang.code == _provider.targetLanguage;
+                  return PopupMenuItem<String>(
+                    value: lang.code,
+                    child: Row(
+                      children: [
+                        if (isSelected)
+                          const Icon(Icons.check, size: 16, color: Colors.green)
+                        else
+                          const SizedBox(width: 16),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text('${lang.name} (${lang.nativeName})')),
+                      ],
+                    ),
+                  );
+                }).toList();
+              },
+            ),
           // ASR 模型选择
           if (_allAsrModels.length > 1)
             PopupMenuButton<String>(
@@ -616,7 +763,6 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
         children: [
           LinearProgressIndicator(
             value: _transcriptText.isEmpty ? 0.3 : 0.6,
-            backgroundColor: Colors.grey.shade300,
           ),
           const SizedBox(height: 8),
           Row(
@@ -629,10 +775,13 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
                 _isProcessing ? '处理中...' :
                 _transcriptText.isEmpty ? '待开始' : '已完成',
                 style: TextStyle(
-                  color: _isRecording && !_isPaused ? Colors.red :
-                         _isPaused ? Colors.orange :
-                         _isProcessing ? Colors.orange :
-                         _transcriptText.isEmpty ? Colors.grey : Colors.green,
+                  color: _isRecording && !_isPaused
+                      ? ThemeUtils.danger(context)
+                      : _isPaused || _isProcessing
+                          ? ThemeUtils.warning(context)
+                          : _transcriptText.isEmpty
+                              ? Theme.of(context).colorScheme.onSurfaceVariant
+                              : ThemeUtils.success(context),
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -676,16 +825,22 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
           height: 80,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: _isRecording ? Colors.red.shade100 : Colors.grey.shade100,
+            color: _isRecording
+                ? ThemeUtils.danger(context).withValues(alpha: 0.10)
+                : Theme.of(context).colorScheme.surfaceContainerHighest,
             border: Border.all(
-              color: _isRecording ? Colors.red : Colors.grey,
+              color: _isRecording
+                  ? ThemeUtils.danger(context)
+                  : Theme.of(context).colorScheme.onSurfaceVariant,
               width: 3,
             ),
           ),
           child: Icon(
             _isRecording ? Icons.mic : Icons.mic_none,
             size: 40,
-            color: _isRecording ? Colors.red : Colors.grey,
+            color: _isRecording
+                ? ThemeUtils.danger(context)
+                : Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
         const SizedBox(height: 16),
@@ -696,8 +851,11 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
-            color: _isRecording ? Colors.red :
-                   _isProcessing ? Colors.orange : Colors.green,
+            color: _isRecording
+                ? ThemeUtils.danger(context)
+                : _isProcessing
+                    ? ThemeUtils.warning(context)
+                    : ThemeUtils.success(context),
           ),
         ),
         // 调试信息：显示录音和 ASR 状态
@@ -706,8 +864,8 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: Colors.grey.shade100,
-              borderRadius: BorderRadius.circular(8),
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(SemiColors.radiusMedium),
             ),
             child: _buildDebugInfo(),
           ),
@@ -727,21 +885,26 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
       children: [
         Text(
           _connectionStatus.isNotEmpty ? _connectionStatus : '状态: 等待连接...',
-          style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          style: TextStyle(
+            fontSize: 11,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
         Row(
           children: [
             Icon(
               streamAlive ? Icons.circle : Icons.error_outline,
               size: 10,
-              color: streamAlive ? Colors.green : Colors.red,
+              color: streamAlive ? ThemeUtils.success(context) : ThemeUtils.danger(context),
             ),
             const SizedBox(width: 4),
             Text(
               '音频: ${(_accumulatedAudio.length / 1024).toStringAsFixed(1)} KB ${streamAlive ? "采集中" : "已中断"}',
               style: TextStyle(
                 fontSize: 11,
-                color: streamAlive ? Colors.grey.shade600 : Colors.red,
+                color: streamAlive
+                    ? Theme.of(context).colorScheme.onSurfaceVariant
+                    : ThemeUtils.danger(context),
               ),
             ),
           ],
@@ -749,15 +912,24 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
         if (wsInfo != null) ...[
           Text(
             'WS: ${wsInfo.url}',
-            style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
+            style: TextStyle(
+              fontSize: 10,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
           Text(
             'WS: 已发送${wsInfo.audioChunksSent}块音频 (${(wsInfo.audioBytesSent / 1024).toStringAsFixed(1)} KB)',
-            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+            style: TextStyle(
+              fontSize: 11,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
           Text(
             'WS: 收到${wsInfo.wsMessagesReceived}条消息, ${wsInfo.wsTextResultsReceived}条含文本',
-            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+            style: TextStyle(
+              fontSize: 11,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ],
@@ -773,17 +945,17 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
     if (_isRecording && !_isPaused) {
       icon = Icons.pause;
       label = '暂停';
-      color = Colors.orange;
+      color = ThemeUtils.warning(context);
       onPressed = _isProcessing ? null : _pauseRecording;
     } else if (_isPaused) {
       icon = Icons.mic;
       label = '继续';
-      color = Colors.green;
+      color = ThemeUtils.success(context);
       onPressed = _isProcessing ? null : _resumeRecording;
     } else {
       icon = Icons.mic;
       label = '开始录音';
-      color = Colors.blue;
+      color = Theme.of(context).colorScheme.primary;
       onPressed = _isProcessing ? null : _startRecording;
     }
 
@@ -808,7 +980,7 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
             label: const Text('停止', style: TextStyle(fontSize: 16)),
             style: ElevatedButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-              backgroundColor: Colors.red,
+              backgroundColor: ThemeUtils.danger(context),
               foregroundColor: Colors.white,
             ),
           ),
@@ -821,7 +993,7 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
@@ -830,7 +1002,7 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
           Icon(
             Icons.timer,
             size: 16,
-            color: Colors.grey.shade600,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
           const SizedBox(width: 4),
           Text(
@@ -851,11 +1023,22 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
     final collapsedHeight = 120.0; // 3行文本高度
     final expandedHeight = screenHeight / 2; // 半屏
 
-    final textContent = _transcriptText.isNotEmpty
-        ? _transcriptText
-        : (_currentTranscription.isNotEmpty
-            ? '正在处理: $_currentTranscription'
-            : '开始录音后将显示实时转录内容...\n\n转录文本将自动保存到会议记录中');
+    final displayMode = _provider.displayMode;
+    final hasTranslation = _translatedText.isNotEmpty;
+
+    String textContent;
+    if (_transcriptText.isEmpty && !_isProcessing) {
+      textContent = '开始录音后将显示实时转录内容...\n\n转录文本将自动保存到会议记录中';
+    } else if (_transcriptText.isEmpty) {
+      textContent = '正在处理: $_currentTranscription';
+    } else if (displayMode == TranslationDisplayMode.original) {
+      textContent = _transcriptText;
+    } else if (displayMode == TranslationDisplayMode.translated) {
+      textContent = hasTranslation ? _translatedText : '翻译中...';
+    } else {
+      // bilingual mode
+      textContent = _transcriptText;
+    }
 
     return GestureDetector(
       onVerticalDragUpdate: (details) {
@@ -884,9 +1067,9 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
         width: double.infinity,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.grey.shade50,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.grey.shade300),
+          color: Theme.of(context).colorScheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(SemiColors.radiusMedium),
+          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -898,7 +1081,7 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
                 height: 4,
                 margin: const EdgeInsets.only(bottom: 8),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade400,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -907,14 +1090,27 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
               children: [
                 const Icon(Icons.subtitles, size: 20),
                 const SizedBox(width: 8),
-                const Text(
-                  '转录文本',
-                  style: TextStyle(
+                Text(
+                  displayMode == TranslationDisplayMode.original
+                      ? '转录文本'
+                      : displayMode == TranslationDisplayMode.translated
+                          ? '翻译文本'
+                          : '双语对照',
+                  style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 const Spacer(),
+                if (_isTranslating)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 8),
+                    child: SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
                 if (_isProcessing)
                   const SizedBox(
                     width: 16,
@@ -926,28 +1122,61 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
             const SizedBox(height: 8),
             Expanded(
               child: _transcriptText.isEmpty && !_isProcessing
-                  ? const Center(
+                  ? Center(
                       child: Text(
                         '开始录音后将显示实时转录内容...',
                         textAlign: TextAlign.center,
                         style: TextStyle(
-                          color: Colors.grey,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                           height: 1.5,
                         ),
                       ),
                     )
-                  : SingleChildScrollView(
-                      child: Text(
-                        textContent,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          height: 1.5,
+                  : displayMode == TranslationDisplayMode.bilingual && hasTranslation
+                      ? _buildBilingualContent()
+                      : SingleChildScrollView(
+                          child: Text(
+                            textContent,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              height: 1.5,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildBilingualContent() {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 原文（灰色小字）
+          Text(
+            _transcriptText,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.5,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Divider(),
+          const SizedBox(height: 8),
+          // 译文（黑色正常字）
+          Text(
+            _translatedText.isNotEmpty ? _translatedText : '翻译中...',
+            style: const TextStyle(
+              fontSize: 14,
+              height: 1.5,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -967,8 +1196,7 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
           icon: const Icon(Icons.check, size: 16),
           label: const Text('完成录音'),
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green,
-            foregroundColor: Colors.white,
+            backgroundColor: ThemeUtils.success(context),
           ),
         ),
       ],
@@ -991,7 +1219,6 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
                 '• 点击"开始录音"按钮开始录音\n' +
                     '• 录音过程中可以实时查看转录\n' +
                     '• 再次点击停止录音',
-                style: TextStyle(color: Colors.grey),
               ),
               SizedBox(height: 12),
               Text('ASR 语音识别：'),
@@ -1000,7 +1227,6 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
                 '• FunASR WebSocket：实时流式识别，逐句返回\n' +
                     '• HTTP ASR：每10秒批量识别一次\n' +
                     '• 支持发言人多色标注',
-                style: TextStyle(color: Colors.grey),
               ),
               SizedBox(height: 12),
               Text('注意事项：'),
@@ -1009,7 +1235,6 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
                 '• 确保麦克风权限已开启\n' +
                     '• 录音环境应保持安静\n' +
                     '• 转录完成后将自动保存',
-                style: TextStyle(color: Colors.grey),
               ),
             ],
           ),
@@ -1057,6 +1282,69 @@ class _MeetingRecordingScreenState extends State<MeetingRecordingScreen> {
         ],
       ),
     );
+  }
+
+  void _toggleDisplayMode() {
+    final modes = TranslationDisplayMode.values;
+    final currentIndex = modes.indexOf(_provider.displayMode);
+    final nextIndex = (currentIndex + 1) % modes.length;
+    _provider.setDisplayMode(modes[nextIndex]);
+    setState(() {});
+  }
+
+  void _switchTranslationLanguage(String languageCode) {
+    _provider.setTargetLanguage(languageCode);
+    // 重新翻译已有的转录文本
+    if (_translatedText.isNotEmpty && _translationService != null) {
+      _retranslateAll();
+    }
+    setState(() {});
+  }
+
+  Future<void> _retranslateAll() async {
+    if (_translationService == null || _transcriptText.isEmpty) return;
+
+    try {
+      setState(() => _isTranslating = true);
+
+      final sourceLang = _detectSourceLanguage(_transcriptText);
+      final targetLang = _provider.targetLanguage;
+
+      if (sourceLang == targetLang) {
+        setState(() {
+          _translatedText = '';
+          _isTranslating = false;
+        });
+        return;
+      }
+
+      final translated = await _translationService!.translate(
+        text: _transcriptText,
+        sourceLanguage: sourceLang,
+        targetLanguage: targetLang,
+      );
+
+      if (mounted) {
+        setState(() {
+          _translatedText = translated;
+          _isTranslating = false;
+        });
+        _provider.updateTranslatedTranscript(_translatedText);
+      }
+    } catch (e) {
+      debugPrint('[Recording] 重新翻译失败: $e');
+      if (mounted) {
+        setState(() => _isTranslating = false);
+      }
+    }
+  }
+
+  String _getLanguageName(String code) {
+    final lang = kSupportedLanguages.firstWhere(
+      (l) => l.code == code,
+      orElse: () => const SupportedLanguage(code: 'en', name: 'English', nativeName: 'English'),
+    );
+    return lang.nativeName;
   }
 
   void _switchAsrModel(String modelName) async {

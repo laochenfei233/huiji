@@ -32,7 +32,9 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
     
     for (var meeting in meetings) {
       // Count words in transcript
-      totalWords += (meeting.transcript ?? '').split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+      if (meeting.transcript != null) {
+        totalWords += meeting.transcript!.split(RegExp(r'\s+')).length;
+      }
       totalParticipants += meeting.participants.length;
     }
     
@@ -48,7 +50,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('会议统计'),
+        title: const Text('统计信息'),
       ),
       body: FutureBuilder<List<Meeting>>(
         future: _meetingsFuture,
@@ -63,6 +65,11 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  const Text(
+                    '会议统计',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 20),
                   Row(
                     children: [
                       Expanded(
@@ -165,7 +172,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
                       itemCount: snapshot.data!.length > 5 ? 5 : snapshot.data!.length,
                       itemBuilder: (context, index) {
                         final meeting = snapshot.data![index];
-                        final wordCount = (meeting.transcript ?? '').split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+                        final wordCount = meeting.transcript?.split(RegExp(r'\s+')).length ?? 0;
                         return Card(
                           child: ListTile(
                             title: Text(meeting.title),

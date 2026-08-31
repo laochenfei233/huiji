@@ -1,7 +1,7 @@
 import 'dart:convert';
-import 'dart:io';
+import 'package:yanji/platform/io_adapter.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
-import 'package:path_provider/path_provider.dart';
+import 'package:yanji/platform/path_adapter.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,8 +14,9 @@ class StorageService {
 
   /// meetings 根目录
   static Future<Directory> getMeetingsRoot() async {
-    final docs = await getApplicationDocumentsDirectory();
-    final root = Directory(join(docs.path, 'meetings'));
+    if (kIsWeb) return Directory('meetings');
+    final docsPath = await getDocsPath();
+    final root = Directory(join(docsPath, 'meetings'));
     if (!await root.exists()) {
       await root.create(recursive: true);
     }
@@ -121,14 +122,16 @@ class StorageService {
   }
 
   Future<Directory> getDocumentsDirectory() async {
-    return await getApplicationDocumentsDirectory();
+    if (kIsWeb) return Directory('');
+    final docsPath = await getDocsPath();
+    return Directory(docsPath);
   }
 
   // ==================== SQLite 初始化 + 迁移 ====================
 
   Future<Database> _initDB() async {
-    final directory = await getApplicationDocumentsDirectory();
-    final path = join(directory.path, 'meetings.db');
+    final docsPath = await getDocsPath();
+    final path = join(docsPath, 'meetings.db');
 
     try {
       return await openDatabase(
@@ -420,6 +423,20 @@ class StorageService {
     final meeting = await loadMeeting(id);
     if (meeting == null) return null;
 
+    if (kIsWeb) {
+      final p = await prefs;
+      final raw = p.getString('meeting_detail_$id');
+      if (raw != null) {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        return MeetingDetail(
+          meeting: meeting,
+          transcript: map['transcript'] as String? ?? '',
+          summary: map['summary'] as String? ?? '',
+        );
+      }
+      return MeetingDetail(meeting: meeting, transcript: '', summary: '');
+    }
+
     String transcript = '';
     String summary = '';
 
@@ -473,6 +490,14 @@ class StorageService {
 
   /// 保存 transcript 到文件
   Future<void> saveTranscript(int meetingId, String text) async {
+    if (kIsWeb) {
+      final p = await prefs;
+      final raw = p.getString('meeting_detail_$meetingId');
+      final map = raw != null ? jsonDecode(raw) as Map<String, dynamic> : <String, dynamic>{};
+      map['transcript'] = text;
+      await p.setString('meeting_detail_$meetingId', jsonEncode(map));
+      return;
+    }
     final meeting = await loadMeeting(meetingId);
     if (meeting == null) return;
     final folder = await _getMeetingFolder(meeting);
@@ -485,6 +510,14 @@ class StorageService {
 
   /// 保存 summary 到文件
   Future<void> saveSummary(int meetingId, String text) async {
+    if (kIsWeb) {
+      final p = await prefs;
+      final raw = p.getString('meeting_detail_$meetingId');
+      final map = raw != null ? jsonDecode(raw) as Map<String, dynamic> : <String, dynamic>{};
+      map['summary'] = text;
+      await p.setString('meeting_detail_$meetingId', jsonEncode(map));
+      return;
+    }
     final meeting = await loadMeeting(meetingId);
     if (meeting == null) return;
     final folder = await _getMeetingFolder(meeting);
@@ -497,6 +530,7 @@ class StorageService {
 
   /// 检查会议是否有录音文件
   Future<bool> hasRecording(int meetingId) async {
+    if (kIsWeb) return false;
     final meeting = await loadMeeting(meetingId);
     if (meeting == null) return false;
     final folder = await _getMeetingFolder(meeting);
@@ -509,6 +543,7 @@ class StorageService {
 
   /// 获取录音文件路径
   Future<String?> getRecordingPath(int meetingId) async {
+    if (kIsWeb) return null;
     final meeting = await loadMeeting(meetingId);
     if (meeting == null) return null;
     final folder = await _getMeetingFolder(meeting);
@@ -522,6 +557,7 @@ class StorageService {
 
   /// 计算存储占用（bytes）
   Future<int> calculateStorageUsage() async {
+    if (kIsWeb) return 0;
     int totalBytes = 0;
     try {
       final meetingsRoot = await getMeetingsRoot();
@@ -538,6 +574,7 @@ class StorageService {
 
   /// 获取所有会议文件夹路径（用于云导出）
   Future<List<MeetingFolderInfo>> getAllMeetingFolders() async {
+    if (kIsWeb) return [];
     final meetings = await loadMeetings();
     final result = <MeetingFolderInfo>[];
     for (final meeting in meetings) {
@@ -579,6 +616,7 @@ class StorageService {
   // ==================== 导入导出 ====================
 
   Future<void> exportMeeting(Meeting meeting, String format, String filePath) async {
+    if (kIsWeb) throw UnsupportedError('Web 平台不支持文件导出');
     final detail = await loadMeetingDetail(meeting.id!);
     final transcript = detail?.transcript ?? '';
     switch (format) {
@@ -594,6 +632,7 @@ class StorageService {
   }
 
   Future<Meeting> importMeeting(String format, String filePath) async {
+    if (kIsWeb) throw UnsupportedError('Web 平台不支持文件导入');
     final file = File(filePath);
     if (!await file.exists()) {
       throw Exception('File does not exist: $filePath');

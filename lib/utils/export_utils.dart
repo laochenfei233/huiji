@@ -1,13 +1,13 @@
 import 'dart:convert';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
+import 'package:yanji/platform/io_adapter.dart';
+import 'package:yanji/platform/path_adapter.dart';
 import 'package:yanji/models/meeting.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 class ExportUtils {
   static Future<void> exportMeeting(Meeting meeting, String format, String fileName) async {
-    final directory = await getApplicationDocumentsDirectory();
-    final filePath = '${directory.path}/$fileName';
+    final docsPath = await getDocsPath();
+    final filePath = '$docsPath/$fileName';
     final file = File(filePath);
     
     switch (format) {
@@ -70,8 +70,8 @@ ${meeting.summary ?? ''}
       ),
     );
     
-    final directory = await getApplicationDocumentsDirectory();
-    final filePath = '${directory.path}/$fileName';
+    final docsPath = await getDocsPath();
+    final filePath = '$docsPath/$fileName';
     final file = File(filePath);
     
     await file.writeAsBytes(await pdf.save());

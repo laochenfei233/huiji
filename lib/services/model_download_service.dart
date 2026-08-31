@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'package:yanji/platform/io_adapter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+import 'package:yanji/platform/path_adapter.dart';
 import 'package:yanji/models/ai_model.dart';
 
 class DownloadState {
@@ -27,8 +27,8 @@ class ModelDownloadService {
   static const _modelsDir = 'models';
 
   Future<Directory> _getModelsDir() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    final dir = Directory('${appDir.path}/$_modelsDir');
+    final docsPath = await getDocsPath();
+    final dir = Directory('$docsPath/$_modelsDir');
     if (!dir.existsSync()) {
       await dir.create(recursive: true);
     }

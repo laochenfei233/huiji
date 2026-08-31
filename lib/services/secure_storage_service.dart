@@ -12,6 +12,8 @@ class SecureStorageService {
   static const String _s3SecretKey = 's3_secret';
   static const String _s3AccessKey = 's3_access';
   static const String _webdavPasswordKey = 'webdav_password';
+  static const String _translationApiKeyKey = 'translation_api_key';
+  static const String _translationApiSecretKey = 'translation_api_secret';
 
   // ==================== ASR API Keys ====================
 
@@ -73,6 +75,34 @@ class SecureStorageService {
 
   static Future<void> removeWebDAVPassword() async {
     await _storage.delete(key: _webdavPasswordKey);
+  }
+
+  // ==================== Translation API Key ====================
+
+  static Future<void> saveTranslationApiKey(String key) async {
+    await _storage.write(key: _translationApiKeyKey, value: key);
+  }
+
+  static Future<String> loadTranslationApiKey() async {
+    return await _storage.read(key: _translationApiKeyKey) ?? '';
+  }
+
+  static Future<void> removeTranslationApiKey() async {
+    await _storage.delete(key: _translationApiKeyKey);
+  }
+
+  // ==================== Translation API Secret ====================
+
+  static Future<void> saveTranslationApiSecret(String secret) async {
+    await _storage.write(key: _translationApiSecretKey, value: secret);
+  }
+
+  static Future<String> loadTranslationApiSecret() async {
+    return await _storage.read(key: _translationApiSecretKey) ?? '';
+  }
+
+  static Future<void> removeTranslationApiSecret() async {
+    await _storage.delete(key: _translationApiSecretKey);
   }
 
   // ==================== Migration Helper ====================

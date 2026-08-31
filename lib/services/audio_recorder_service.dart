@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:yanji/platform/io_adapter.dart';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';

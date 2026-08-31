@@ -5,8 +5,7 @@ import 'package:flutter/foundation.dart';
 /// Web 平台不支持，提供空实现
 class LocalLlmService {
   String? _modelPath;
-  String? _contextId;
-  bool _isLoaded = false;
+  final bool _isLoaded = false;
 
   bool get isLoaded => _isLoaded;
   bool get isGenerating => false;
