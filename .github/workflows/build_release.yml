@@ -81,6 +81,9 @@ jobs:
         run: yes | sdkmanager --licenses || true
       - name: Install CMake and NDK
         run: sdkmanager "cmake;3.31.0" "ndk;28.2.13676358"
+      - name: Patch fllama proguard file for AGP 9
+        run: |
+          find "$HOME/.pub-cache/hosted" -path "*/fllama-0.0.1/android/build.gradle" -exec sed -i "s/proguard-android.txt/proguard-android-optimize.txt/g" {} +
       - name: Build Android Release
         run: flutter build apk --release
       - uses: actions/upload-artifact@v4
