@@ -118,7 +118,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             curve: Curves.easeOutCubic,
             width: _isSidebarOpen ? 250 : 60,
             child: Container(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              color: Theme.of(context).colorScheme.surface,
               child: Column(
                 children: [
                   Container(
@@ -244,7 +244,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   }
                 },
                 child: Material(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  color: Theme.of(context).colorScheme.surface,
                   elevation: 4,
                   child: SafeArea(
                     child: Sidebar(
