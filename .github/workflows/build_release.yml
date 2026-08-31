@@ -17,7 +17,8 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libgl1-mesa-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libgl1-mesa-dev libsecret-1-dev libjsoncpp-dev libasound2-dev
+      - run: flutter config --enable-linux-desktop
       - run: flutter pub get
       - run: flutter build linux --release
       - uses: actions/upload-artifact@v4
@@ -33,6 +34,7 @@ jobs:
         with:
           flutter-version: '3.44.0'
           channel: 'stable'
+      - run: flutter config --enable-windows-desktop
       - run: flutter pub get
       - run: flutter build windows --release
       - uses: actions/upload-artifact@v4
@@ -48,6 +50,7 @@ jobs:
         with:
           flutter-version: '3.44.0'
           channel: 'stable'
+      - run: flutter config --enable-macos-desktop
       - run: flutter pub get
       - run: flutter build macos --release
       - uses: actions/upload-artifact@v4
@@ -71,8 +74,10 @@ jobs:
           distribution: 'temurin'
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
       - name: Install CMake and NDK
-        run: sdkmanager "cmake;3.31.0" "ndk;28.0.12433566"
+        run: sdkmanager "cmake;3.31.0" "ndk;28.2.13676358"
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
