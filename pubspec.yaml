@@ -41,7 +41,7 @@ dependencies:
   record: ^7.1.0
 
   # 锁屏保持唤醒
-  wakelock_plus: ^1.6.1
+  wakelock_plus: 1.6.1
 
   # 录音常驻通知
   flutter_local_notifications: ^22.0.1
